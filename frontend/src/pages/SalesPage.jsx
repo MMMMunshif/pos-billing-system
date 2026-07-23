@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader';
+import InvoicePreview from '../components/InvoicePreview';
 import { subscribeProducts } from '../services/productService';
 import { subscribeCustomers } from '../services/customerService';
 import { createSale } from '../services/salesService';
@@ -26,12 +27,29 @@ const IconBox = ({ children, color = 'blue' }) => {
 
   return (
     <span
-      className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-base ${colors[color] || colors.blue}`}
+      className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-base ${
+        colors[color] || colors.blue
+      }`}
     >
       {children}
     </span>
   );
 };
+
+function createInvoiceNumber() {
+  return `INV-${Date.now().toString().slice(-6)}`;
+}
+
+function getCustomerPhone(customer) {
+  return (
+    customer?.phone ||
+    customer?.phoneNumber ||
+    customer?.contactNumber ||
+    customer?.mobile ||
+    customer?.whatsapp ||
+    ''
+  );
+}
 
 export default function SalesPage() {
   const [products, setProducts] = useState([]);
@@ -43,6 +61,8 @@ export default function SalesPage() {
   const [saleDate, setSaleDate] = useState(toDateInputValue());
   const [items, setItems] = useState([{ ...emptyItem }]);
   const [saving, setSaving] = useState(false);
+  const [invoice, setInvoice] = useState(null);
+  const [lastInvoice, setLastInvoice] = useState(null);
 
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -57,15 +77,31 @@ export default function SalesPage() {
     };
   }, []);
 
+  useEffect(() => {
+    try {
+      const savedInvoice = localStorage.getItem('lastInvoice');
+
+      if (savedInvoice) {
+        setLastInvoice(JSON.parse(savedInvoice));
+      }
+    } catch (error) {
+      console.error('Failed to load last invoice:', error);
+      localStorage.removeItem('lastInvoice');
+    }
+  }, []);
+
   const subtotal = items.reduce((sum, item) => {
     const quantity = Number(item.quantity) || 0;
     const unitPrice = Number(item.unitPrice) || 0;
     return sum + quantity * unitPrice;
   }, 0);
 
-  const balance = calcBalance(subtotal, Number(paidAmount) || 0);
-
   const selectedCustomer = customers.find((customer) => customer.id === customerId);
+
+  const currentPaidAmount =
+    paymentType === PAYMENT_TYPES.CASH ? subtotal : Number(paidAmount) || 0;
+
+  const balance = calcBalance(subtotal, currentPaidAmount);
 
   const updateItem = (index, field, value) => {
     setItems((prevItems) => {
@@ -100,12 +136,22 @@ export default function SalesPage() {
   const handleSubmit = async (event) => {
     event.preventDefault();
 
-    const validItems = items.filter(
-      (item) => item.productId && Number(item.quantity) > 0
-    );
+    const validItems = items
+      .filter((item) => item.productId && Number(item.quantity) > 0)
+      .map((item) => ({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: Number(item.quantity),
+        unitPrice: Number(item.unitPrice),
+      }));
 
     if (!validItems.length) {
       showToast('Add at least one product', 'error');
+      return;
+    }
+
+    if (!user?.uid) {
+      showToast('Login user not found. Please login again.', 'error');
       return;
     }
 
@@ -123,6 +169,11 @@ export default function SalesPage() {
       return;
     }
 
+    const actualPaidAmount =
+      paymentType === PAYMENT_TYPES.CASH ? subtotal : Number(paidAmount) || 0;
+
+    const finalBalance = calcBalance(subtotal, actualPaidAmount);
+
     setSaving(true);
 
     try {
@@ -136,18 +187,35 @@ export default function SalesPage() {
               ? selectedCustomer?.name
               : 'Walk-in',
           paymentType,
-          paidAmount:
-            paymentType === PAYMENT_TYPES.CASH ? subtotal : Number(paidAmount) || 0,
+          paidAmount: actualPaidAmount,
           saleDate,
         },
-        validItems.map((item) => ({
-          productId: item.productId,
-          productName: item.productName,
-          quantity: Number(item.quantity),
-          unitPrice: Number(item.unitPrice),
-        })),
+        validItems,
         user.uid
       );
+
+      const invoiceData = {
+        invoiceNo: createInvoiceNumber(),
+        saleDate,
+        customerType,
+        customerName:
+          customerType === CUSTOMER_TYPES.REGISTERED
+            ? selectedCustomer?.name
+            : 'Walk-in Customer',
+        customerPhone:
+          customerType === CUSTOMER_TYPES.REGISTERED
+            ? getCustomerPhone(selectedCustomer)
+            : '',
+        paymentType,
+        items: validItems,
+        subtotal,
+        paidAmount: actualPaidAmount,
+        balance: finalBalance,
+      };
+
+      setInvoice(invoiceData);
+      setLastInvoice(invoiceData);
+      localStorage.setItem('lastInvoice', JSON.stringify(invoiceData));
 
       showToast('Sale recorded successfully');
 
@@ -167,13 +235,15 @@ export default function SalesPage() {
     <div className="min-h-full bg-slate-50">
       <PageHeader
         title="New Sale"
-        subtitle="Record a sale and update stock automatically"
+        subtitle="Record a sale, generate invoice, print, and send bill through WhatsApp"
       />
 
-      <form onSubmit={handleSubmit} className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <form
+        onSubmit={handleSubmit}
+        className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8"
+      >
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">
           <div className="space-y-6">
-            {/* Sale Details */}
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
               <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50/60 to-white px-6 py-5">
                 <IconBox color="blue">🛒</IconBox>
@@ -221,10 +291,14 @@ export default function SalesPage() {
                       <option value="">Select customer</option>
                       {customers.map((customer) => (
                         <option key={customer.id} value={customer.id}>
-                          {customer.name} — Debt: {formatCurrency(customer.totalDebt)}
+                          {customer.name} — Debt:{' '}
+                          {formatCurrency(customer.totalDebt)}
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Registered customer phone number will be used for WhatsApp bill.
+                    </p>
                   </div>
                 )}
 
@@ -258,7 +332,6 @@ export default function SalesPage() {
               </div>
             </section>
 
-            {/* Sale Items */}
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
               <div className="flex flex-col gap-4 border-b border-slate-100 bg-gradient-to-r from-blue-50/60 to-white px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
@@ -294,7 +367,8 @@ export default function SalesPage() {
                 <div className="space-y-3">
                   {items.map((item, index) => {
                     const lineTotal =
-                      (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+                      (Number(item.quantity) || 0) *
+                      (Number(item.unitPrice) || 0);
 
                     return (
                       <div
@@ -386,7 +460,6 @@ export default function SalesPage() {
             </section>
           </div>
 
-          {/* Summary sidebar */}
           <aside className="space-y-6">
             <section className="sticky top-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/50">
               <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50/60 to-white px-6 py-5">
@@ -395,7 +468,9 @@ export default function SalesPage() {
                   <h2 className="text-base font-semibold text-slate-900">
                     Sale Summary
                   </h2>
-                  <p className="text-sm text-slate-500">Review before complete</p>
+                  <p className="text-sm text-slate-500">
+                    Review before complete
+                  </p>
                 </div>
               </div>
 
@@ -403,7 +478,9 @@ export default function SalesPage() {
                 <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
                   <div className="flex items-center justify-between text-sm text-slate-500">
                     <span>Total Items</span>
-                    <span className="font-medium text-slate-700">{items.length}</span>
+                    <span className="font-medium text-slate-700">
+                      {items.length}
+                    </span>
                   </div>
 
                   <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
@@ -465,14 +542,28 @@ export default function SalesPage() {
                   {saving ? 'Processing Sale…' : 'Complete Sale'}
                 </button>
 
+                {lastInvoice && (
+                  <button
+                    type="button"
+                    onClick={() => setInvoice(lastInvoice)}
+                    className="w-full rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
+                  >
+                    View Last Invoice
+                  </button>
+                )}
+
                 <p className="text-center text-xs text-slate-400">
-                  Stock will be updated automatically after sale completion.
+                  Stock will be updated automatically and invoice will be generated.
                 </p>
               </div>
             </section>
           </aside>
         </div>
       </form>
+
+      {invoice && (
+        <InvoicePreview invoice={invoice} onClose={() => setInvoice(null)} />
+      )}
     </div>
   );
 }
