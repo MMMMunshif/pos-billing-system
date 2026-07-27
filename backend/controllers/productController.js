@@ -14,6 +14,20 @@ const normalizeKey = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const normalizeBarcode = (value) =>
+  String(value || '').trim().toUpperCase();
+
+const generateMckBarcode = () => {
+  const now = new Date();
+  const year = String(now.getFullYear()).slice(-2);
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const timePart = String(Date.now()).slice(-6);
+  const randomPart = Math.floor(Math.random() * 999).toString().padStart(3, '0');
+
+  return `MCK${year}${month}${day}${timePart}${randomPart}`;
+};
+
 const productPayload = (data, { partial = false } = {}) => {
   const payload = {};
   const name = trimText(data.name);
@@ -34,17 +48,32 @@ const productPayload = (data, { partial = false } = {}) => {
     payload.brandLower = normalizeKey(data.brand);
   }
 
+  if (!partial || data.barcode !== undefined) {
+    const barcode = normalizeBarcode(data.barcode || generateMckBarcode());
+
+    if (!barcode) {
+      throw new HttpError(400, 'Barcode is required');
+    }
+
+    payload.barcode = barcode;
+    payload.barcodeLower = barcode.toLowerCase();
+  }
+
   if (!partial || data.sellingPrice !== undefined) {
     payload.sellingPrice = numberValue(data.sellingPrice, 'Selling price');
     payload.priceKey = Number(payload.sellingPrice || 0);
   }
 
   if (!partial || data.currentStock !== undefined) {
-    payload.currentStock = numberValue(data.currentStock, 'Current stock', { integer: true });
+    payload.currentStock = numberValue(data.currentStock, 'Current stock', {
+      integer: true,
+    });
   }
 
   if (!partial || data.minStockAlert !== undefined) {
-    payload.minStockAlert = numberValue(data.minStockAlert, 'Minimum stock alert', { integer: true });
+    payload.minStockAlert = numberValue(data.minStockAlert, 'Minimum stock alert', {
+      integer: true,
+    });
   }
 
   if (!partial || data.description !== undefined) {
@@ -63,6 +92,7 @@ async function findMatchingProduct(tx, productsRef, name, brand, shop, sellingPr
 
   return snap.docs.find((doc) => {
     const data = doc.data();
+
     return (
       normalizeKey(data.name) === nameKey &&
       normalizeKey(data.brand) === brandKey &&
@@ -81,7 +111,9 @@ async function findDuplicateProduct(db, currentProductId, name, brand, shop, sel
 
   return snap.docs.find((doc) => {
     if (doc.id === currentProductId) return false;
+
     const data = doc.data();
+
     return (
       normalizeKey(data.name) === nameKey &&
       normalizeKey(data.brand) === brandKey &&
@@ -91,14 +123,39 @@ async function findDuplicateProduct(db, currentProductId, name, brand, shop, sel
   });
 }
 
+async function findDuplicateBarcode(db, currentProductId, barcode) {
+  const normalizedBarcode = normalizeBarcode(barcode);
+
+  if (!normalizedBarcode) return null;
+
+  const snap = await db.collection(COLLECTIONS.PRODUCTS).get();
+
+  return snap.docs.find((doc) => {
+    if (doc.id === currentProductId) return false;
+
+    const data = doc.data();
+
+    return normalizeBarcode(data.barcode) === normalizedBarcode;
+  });
+}
+
 export async function listProducts(req, res) {
-  const snap = await getDb().collection(COLLECTIONS.PRODUCTS).orderBy('name').get();
+  const snap = await getDb()
+    .collection(COLLECTIONS.PRODUCTS)
+    .orderBy('name')
+    .get();
+
   res.json({ success: true, data: snap.docs.map(serializeDoc) });
 }
 
 export async function getProduct(req, res) {
-  const snap = await getDb().collection(COLLECTIONS.PRODUCTS).doc(req.params.id).get();
+  const snap = await getDb()
+    .collection(COLLECTIONS.PRODUCTS)
+    .doc(req.params.id)
+    .get();
+
   if (!snap.exists) throw new HttpError(404, 'Product not found');
+
   res.json({ success: true, data: serializeDoc(snap) });
 }
 
@@ -107,8 +164,15 @@ export async function createProduct(req, res) {
   const payload = productPayload(req.body);
   const now = admin.firestore.FieldValue.serverTimestamp();
 
+  const duplicateBarcode = await findDuplicateBarcode(db, null, payload.barcode);
+
+  if (duplicateBarcode) {
+    throw new HttpError(409, 'A product with this barcode already exists');
+  }
+
   const result = await db.runTransaction(async (tx) => {
     const productsRef = db.collection(COLLECTIONS.PRODUCTS);
+
     const existingDoc = await findMatchingProduct(
       tx,
       productsRef,
@@ -126,12 +190,21 @@ export async function createProduct(req, res) {
       tx.update(existingDoc.ref, {
         name: payload.name,
         nameLower: normalizeKey(payload.name),
+
         shop: payload.shop,
         shopLower: normalizeKey(payload.shop),
+
         brand: payload.brand,
         brandLower: normalizeKey(payload.brand),
+
+        barcode: existingData.barcode || payload.barcode || generateMckBarcode(),
+        barcodeLower: normalizeBarcode(
+          existingData.barcode || payload.barcode || generateMckBarcode()
+        ).toLowerCase(),
+
         sellingPrice: payload.sellingPrice,
         priceKey: Number(payload.sellingPrice || 0),
+
         currentStock: oldStock + newStock,
         minStockAlert: payload.minStockAlert || existingData.minStockAlert || 5,
         description: payload.description || existingData.description || '',
@@ -142,8 +215,11 @@ export async function createProduct(req, res) {
     }
 
     const newRef = productsRef.doc();
+
     tx.set(newRef, {
       ...payload,
+      barcode: payload.barcode || generateMckBarcode(),
+      barcodeLower: normalizeBarcode(payload.barcode || generateMckBarcode()).toLowerCase(),
       nameLower: normalizeKey(payload.name),
       brandLower: normalizeKey(payload.brand),
       shopLower: normalizeKey(payload.shop),
@@ -167,8 +243,12 @@ export async function createProduct(req, res) {
 export async function updateProduct(req, res) {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.PRODUCTS).doc(req.params.id);
+
   const existing = await ref.get();
-  if (!existing.exists) throw new HttpError(404, 'Product not found');
+
+  if (!existing.exists) {
+    throw new HttpError(404, 'Product not found');
+  }
 
   const existingData = existing.data();
   const payload = productPayload(req.body, { partial: true });
@@ -177,8 +257,10 @@ export async function updateProduct(req, res) {
   const finalBrand = payload.brand ?? existingData.brand;
   const finalShop = payload.shop ?? existingData.shop;
   const finalSellingPrice = payload.sellingPrice ?? existingData.sellingPrice;
+  const finalBarcode =
+    payload.barcode ?? existingData.barcode ?? generateMckBarcode();
 
-  const duplicate = await findDuplicateProduct(
+  const duplicateProduct = await findDuplicateProduct(
     db,
     req.params.id,
     finalName,
@@ -187,15 +269,27 @@ export async function updateProduct(req, res) {
     finalSellingPrice
   );
 
-  if (duplicate) {
+  if (duplicateProduct) {
     throw new HttpError(
       409,
       'A product with the same name, brand, purchased from, and selling price already exists'
     );
   }
 
+  const duplicateBarcode = await findDuplicateBarcode(
+    db,
+    req.params.id,
+    finalBarcode
+  );
+
+  if (duplicateBarcode) {
+    throw new HttpError(409, 'A product with this barcode already exists');
+  }
+
   await ref.update({
     ...payload,
+    barcode: normalizeBarcode(finalBarcode),
+    barcodeLower: normalizeBarcode(finalBarcode).toLowerCase(),
     nameLower: normalizeKey(finalName),
     brandLower: normalizeKey(finalBrand),
     shopLower: normalizeKey(finalShop),
@@ -209,13 +303,19 @@ export async function updateProduct(req, res) {
 export async function deleteProduct(req, res) {
   const ref = getDb().collection(COLLECTIONS.PRODUCTS).doc(req.params.id);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Product not found');
+
+  if (!snap.exists) {
+    throw new HttpError(404, 'Product not found');
+  }
+
   await ref.delete();
+
   res.json({ success: true, message: 'Product deleted' });
 }
 
 export async function adjustProductStock(req, res) {
   const db = getDb();
+
   const change = numberValue(req.body.quantityChange, 'Quantity change', {
     min: -1000000000,
     integer: true,
@@ -224,10 +324,16 @@ export async function adjustProductStock(req, res) {
   const newStock = await db.runTransaction(async (tx) => {
     const ref = db.collection(COLLECTIONS.PRODUCTS).doc(req.params.id);
     const snap = await tx.get(ref);
-    if (!snap.exists) throw new HttpError(404, 'Product not found');
+
+    if (!snap.exists) {
+      throw new HttpError(404, 'Product not found');
+    }
 
     const stock = Number(snap.data().currentStock || 0) + change;
-    if (stock < 0) throw new HttpError(409, 'Insufficient stock');
+
+    if (stock < 0) {
+      throw new HttpError(409, 'Insufficient stock');
+    }
 
     tx.update(ref, {
       currentStock: stock,
