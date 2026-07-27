@@ -41,7 +41,7 @@ export default function LoginPage() {
       <div className="login-card">
         <div className="login-header">
           <span className="login-logo">🏪</span>
-          <h1>Fancy Shop Manager</h1>
+          <h1>MCK Billing System</h1>
           <p>Sign in to manage your retail shop</p>
         </div>
 

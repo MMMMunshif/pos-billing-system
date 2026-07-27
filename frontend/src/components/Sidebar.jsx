@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/authContext';
 
-const navItems = [
+const adminNavItems = [
   { to: '/dashboard', label: 'Dashboard', icon: '📊' },
   { to: '/products', label: 'Products', icon: '📦' },
   { to: '/stock', label: 'Add Stock', icon: '📥' },
@@ -11,8 +11,17 @@ const navItems = [
   { to: '/reports', label: 'Reports', icon: '📋' },
 ];
 
+const staffNavItems = [
+  { to: '/dashboard', label: 'Dashboard', icon: '📊' },
+  { to: '/products', label: 'Products', icon: '📦' },
+  { to: '/sales', label: 'Sales', icon: '💰' },
+  { to: '/customers', label: 'Customers', icon: '👥' },
+];
+
 export default function Sidebar({ open, onClose }) {
   const { userProfile, logout } = useAuth();
+
+  const navItems = userProfile?.role === 'staff' ? staffNavItems : adminNavItems;
 
   return (
     <>
@@ -21,8 +30,8 @@ export default function Sidebar({ open, onClose }) {
         <div className="sidebar-brand">
           <span className="brand-icon">🏪</span>
           <div>
-            <strong>Fancy Shop</strong>
-            <small>Management</small>
+            <strong>MCK </strong>
+            <small>Multy Corner Kattankudy</small>
           </div>
         </div>
 

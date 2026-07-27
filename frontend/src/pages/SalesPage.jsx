@@ -51,6 +51,14 @@ function getCustomerPhone(customer) {
   );
 }
 
+function getProductStock(product) {
+  return Number(product?.currentStock ?? product?.stock ?? 0);
+}
+
+function getProductName(product) {
+  return product?.name || 'Product';
+}
+
 export default function SalesPage() {
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -103,6 +111,32 @@ export default function SalesPage() {
 
   const balance = calcBalance(subtotal, currentPaidAmount);
 
+  const getSelectedProduct = (productId) => {
+    return products.find((product) => product.id === productId);
+  };
+
+  const getItemStockError = (item) => {
+    if (!item.productId) return '';
+
+    const product = getSelectedProduct(item.productId);
+    if (!product) return '';
+
+    const stock = getProductStock(product);
+    const quantity = Number(item.quantity) || 0;
+
+    if (stock <= 0) {
+      return `${getProductName(product)} is out of stock`;
+    }
+
+    if (quantity > stock) {
+      return `Only ${stock} items available in stock`;
+    }
+
+    return '';
+  };
+
+  const hasStockError = items.some((item) => getItemStockError(item));
+
   const updateItem = (index, field, value) => {
     setItems((prevItems) => {
       const nextItems = [...prevItems];
@@ -118,6 +152,7 @@ export default function SalesPage() {
         if (product) {
           nextItems[index].productName = product.name;
           nextItems[index].unitPrice = product.sellingPrice;
+          nextItems[index].quantity = 1;
         }
       }
 
@@ -131,6 +166,36 @@ export default function SalesPage() {
 
   const removeItemRow = (index) => {
     setItems((prevItems) => prevItems.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const validateStockBeforeSale = (validItems) => {
+    const productQuantityMap = {};
+
+    validItems.forEach((item) => {
+      productQuantityMap[item.productId] =
+        (productQuantityMap[item.productId] || 0) + Number(item.quantity || 0);
+    });
+
+    for (const productId of Object.keys(productQuantityMap)) {
+      const product = getSelectedProduct(productId);
+      const availableStock = getProductStock(product);
+      const requestedQuantity = productQuantityMap[productId];
+
+      if (requestedQuantity > availableStock) {
+        showToast(
+          `Only ${availableStock} items available in stock for ${getProductName(product)}`,
+          'error'
+        );
+        return false;
+      }
+
+      if (availableStock <= 0) {
+        showToast(`${getProductName(product)} is out of stock`, 'error');
+        return false;
+      }
+    }
+
+    return true;
   };
 
   const handleSubmit = async (event) => {
@@ -147,6 +212,10 @@ export default function SalesPage() {
 
     if (!validItems.length) {
       showToast('Add at least one product', 'error');
+      return;
+    }
+
+    if (!validateStockBeforeSale(validItems)) {
       return;
     }
 
@@ -341,7 +410,7 @@ export default function SalesPage() {
                       Sale Items
                     </h2>
                     <p className="text-sm text-slate-500">
-                      Add products and quantities for this sale
+                      Select products and check available stock before sale
                     </p>
                   </div>
                 </div>
@@ -366,6 +435,10 @@ export default function SalesPage() {
 
                 <div className="space-y-3">
                   {items.map((item, index) => {
+                    const selectedProduct = getSelectedProduct(item.productId);
+                    const availableStock = getProductStock(selectedProduct);
+                    const stockError = getItemStockError(item);
+
                     const lineTotal =
                       (Number(item.quantity) || 0) *
                       (Number(item.unitPrice) || 0);
@@ -373,7 +446,11 @@ export default function SalesPage() {
                     return (
                       <div
                         key={index}
-                        className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:border-slate-300 hover:bg-slate-50 md:grid-cols-[1fr_90px_140px_140px_44px] md:items-center"
+                        className={`grid grid-cols-1 gap-3 rounded-2xl border p-4 transition md:grid-cols-[1fr_90px_140px_140px_44px] md:items-center ${
+                          stockError
+                            ? 'border-red-200 bg-red-50'
+                            : 'border-slate-200 bg-slate-50/70 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
                       >
                         <div>
                           <label className="mb-1 block text-xs font-medium text-slate-500 md:hidden">
@@ -388,14 +465,32 @@ export default function SalesPage() {
                             className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                           >
                             <option value="">Select product</option>
-                            {products.map((product) => (
-                              <option key={product.id} value={product.id}>
-                                {product.name} | {product.brand || 'No brand'} |{' '}
-                                {formatCurrency(product.sellingPrice)} | Stock:{' '}
-                                {product.currentStock}
-                              </option>
-                            ))}
+                            {products.map((product) => {
+                              const stock = getProductStock(product);
+
+                              return (
+                                <option
+                                  key={product.id}
+                                  value={product.id}
+                                  disabled={stock <= 0}
+                                >
+                                  {product.name} | {formatCurrency(product.sellingPrice)} | Stock:{' '}
+                                  {stock}
+                                </option>
+                              );
+                            })}
                           </select>
+
+                          {selectedProduct && (
+                            <p
+                              className={`mt-1 text-xs font-semibold ${
+                                stockError ? 'text-red-600' : 'text-green-600'
+                              }`}
+                            >
+                              {stockError ||
+                                `Available stock: ${availableStock}`}
+                            </p>
+                          )}
                         </div>
 
                         <div>
@@ -405,12 +500,17 @@ export default function SalesPage() {
                           <input
                             type="number"
                             min="1"
+                            max={selectedProduct ? availableStock : undefined}
                             value={item.quantity}
                             onChange={(event) =>
                               updateItem(index, 'quantity', event.target.value)
                             }
                             required
-                            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                            className={`w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:ring-4 ${
+                              stockError
+                                ? 'border-red-300 focus:border-red-500 focus:ring-red-100'
+                                : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
+                            }`}
                           />
                         </div>
 
@@ -500,6 +600,12 @@ export default function SalesPage() {
                   </div>
                 </div>
 
+                {hasStockError && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+                    Please fix stock quantity before completing sale.
+                  </div>
+                )}
+
                 <div className="rounded-2xl bg-gradient-to-br from-blue-600 to-blue-700 p-5 text-white shadow-lg shadow-blue-600/25">
                   <p className="text-sm font-medium text-blue-100">Subtotal</p>
                   <p className="mt-2 text-3xl font-bold tracking-tight">
@@ -536,7 +642,7 @@ export default function SalesPage() {
 
                 <button
                   type="submit"
-                  disabled={saving || subtotal <= 0}
+                  disabled={saving || subtotal <= 0 || hasStockError}
                   className="w-full rounded-xl bg-blue-600 px-5 py-3.5 text-sm font-bold text-white shadow-md shadow-blue-600/25 transition hover:bg-blue-700 active:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                 >
                   {saving ? 'Processing Sale…' : 'Complete Sale'}

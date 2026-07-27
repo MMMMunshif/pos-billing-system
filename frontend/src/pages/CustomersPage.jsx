@@ -4,6 +4,7 @@ import SearchBar from '../components/SearchBar';
 import InvoicePreview from '../components/InvoicePreview';
 import { subscribeCustomers, createCustomer } from '../services/customerService';
 import { getSales, getSaleItems } from '../services/salesService';
+import { useAuth } from '../context/authContext';
 import { useToast } from '../context/toastContext';
 import { formatCurrency } from '../utils/helpers';
 
@@ -83,6 +84,10 @@ function getSaleAmount(sale) {
   );
 }
 
+function getSalePaidAmount(sale) {
+  return Number(sale.paidAmount || sale.paid || 0);
+}
+
 function saleBelongsToCustomer(sale, customer) {
   const saleCustomerId =
     sale.customerId || sale.customer?.id || sale.customer?.customerId || '';
@@ -106,19 +111,24 @@ function saleBelongsToCustomer(sale, customer) {
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState([]);
+  const [allSales, setAllSales] = useState([]);
   const [search, setSearch] = useState('');
+  const [filterType, setFilterType] = useState('all');
+
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [customerSales, setCustomerSales] = useState([]);
   const [customerItems, setCustomerItems] = useState([]);
   const [loadingPurchases, setLoadingPurchases] = useState(false);
   const [purchaseError, setPurchaseError] = useState('');
   const [invoice, setInvoice] = useState(null);
 
+  const { userProfile } = useAuth();
   const { showToast } = useToast();
+
+  const isAdmin = userProfile?.role === 'admin';
 
   useEffect(() => {
     const unsubscribeCustomers = subscribeCustomers(setCustomers);
@@ -130,26 +140,76 @@ export default function CustomersPage() {
     };
   }, []);
 
+  useEffect(() => {
+    async function loadSalesSummary() {
+      try {
+        const result = await getSales(500);
+        setAllSales(getArrayFromApiResult(result));
+      } catch (error) {
+        console.error('Failed to load sales summary:', error);
+      }
+    }
+
+    loadSalesSummary();
+  }, []);
+
+  const getCustomerSales = (customer) => {
+    return allSales.filter((sale) => saleBelongsToCustomer(sale, customer));
+  };
+
+  const getCustomerTotalPurchase = (customer) => {
+    return getCustomerSales(customer).reduce(
+      (sum, sale) => sum + getSaleAmount(sale),
+      0
+    );
+  };
+
+  const getCustomerPaidAmount = (customer) => {
+    const totalPurchase = getCustomerTotalPurchase(customer);
+    const debt = Number(customer.totalDebt || 0);
+
+    const salesPaid = getCustomerSales(customer).reduce(
+      (sum, sale) => sum + getSalePaidAmount(sale),
+      0
+    );
+
+    if (salesPaid > 0) return salesPaid;
+
+    return Math.max(totalPurchase - debt, 0);
+  };
+
+  const getLastPaymentDate = (customer) => {
+    const customerSales = getCustomerSales(customer)
+      .filter((sale) => getSalePaidAmount(sale) > 0 || getSaleAmount(sale) > 0)
+      .sort((a, b) => {
+        const dateA = new Date(getSaleDate(a)).getTime() || 0;
+        const dateB = new Date(getSaleDate(b)).getTime() || 0;
+        return dateB - dateA;
+      });
+
+    return customerSales.length ? getSaleDate(customerSales[0]) : '-';
+  };
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
 
-    if (!q) return customers;
-
-    return customers.filter(
-      (customer) =>
+    return customers.filter((customer) => {
+      const matchesSearch =
+        !q ||
         customer.name?.toLowerCase().includes(q) ||
-        customer.phone?.toLowerCase().includes(q) ||
-        customer.address?.toLowerCase().includes(q)
-    );
-  }, [customers, search]);
+        getCustomerPhone(customer).toLowerCase().includes(q) ||
+        customer.address?.toLowerCase().includes(q);
 
-  const purchaseTotal = customerItems.reduce(
-    (sum, item) => sum + item.quantity * item.unitPrice,
-    0
-  );
+      const debt = Number(customer.totalDebt || 0);
 
-  const currentDebt = Number(selectedCustomer?.totalDebt || 0);
-  const paidAmount = Math.max(purchaseTotal - currentDebt, 0);
+      const matchesFilter =
+        filterType === 'all' ||
+        (filterType === 'debt' && debt > 0) ||
+        (filterType === 'noDebt' && debt <= 0);
+
+      return matchesSearch && matchesFilter;
+    });
+  }, [customers, search, filterType]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -169,26 +229,16 @@ export default function CustomersPage() {
 
   const loadCustomerPurchases = async (customer) => {
     setSelectedCustomer(customer);
-    setCustomerSales([]);
     setCustomerItems([]);
     setPurchaseError('');
     setLoadingPurchases(true);
 
     try {
-      const salesResult = await getSales(500);
-      const allSales = getArrayFromApiResult(salesResult);
-
-      const matchedSales = allSales.filter((sale) =>
-        saleBelongsToCustomer(sale, customer)
-      );
-
-      setCustomerSales(matchedSales);
-
+      const matchedSales = getCustomerSales(customer);
       const allItems = [];
 
       for (const sale of matchedSales) {
         const saleId = getSaleId(sale);
-
         let items = [];
 
         if (Array.isArray(sale.items) && sale.items.length) {
@@ -253,10 +303,17 @@ export default function CustomersPage() {
 
   const closePurchaseModal = () => {
     setSelectedCustomer(null);
-    setCustomerSales([]);
     setCustomerItems([]);
     setPurchaseError('');
   };
+
+  const purchaseTotal = customerItems.reduce(
+    (sum, item) => sum + item.quantity * item.unitPrice,
+    0
+  );
+
+  const currentDebt = Number(selectedCustomer?.totalDebt || 0);
+  const paidAmount = Math.max(purchaseTotal - currentDebt, 0);
 
   const handleGenerateInvoice = () => {
     if (!selectedCustomer) return;
@@ -291,19 +348,21 @@ export default function CustomersPage() {
     <div>
       <PageHeader
         title="Customers"
-        subtitle="Manage registered customers, credit, and customer purchase invoice"
+        subtitle="Manage customer debt, purchases, and invoices"
         action={
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowForm(!showForm)}
-          >
-            {showForm ? 'Cancel' : '+ Add Customer'}
-          </button>
+          isAdmin ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowForm(!showForm)}
+            >
+              {showForm ? 'Cancel' : '+ Add Customer'}
+            </button>
+          ) : null
         }
       />
 
-      {showForm && (
+      {showForm && isAdmin && (
         <form className="card form-card" onSubmit={handleSubmit}>
           <div className="form-grid">
             <div className="form-group">
@@ -361,57 +420,116 @@ export default function CustomersPage() {
         placeholder="Search customers..."
       />
 
+      <div className="mb-4 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={() => setFilterType('all')}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${
+            filterType === 'all'
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-slate-700 ring-1 ring-slate-200'
+          }`}
+        >
+          All Customers
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilterType('debt')}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${
+            filterType === 'debt'
+              ? 'bg-red-600 text-white'
+              : 'bg-white text-slate-700 ring-1 ring-slate-200'
+          }`}
+        >
+          Debt Customers
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilterType('noDebt')}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${
+            filterType === 'noDebt'
+              ? 'bg-green-600 text-white'
+              : 'bg-white text-slate-700 ring-1 ring-slate-200'
+          }`}
+        >
+          No Debt
+        </button>
+      </div>
+
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
+          <table className="w-full min-w-[1050px] border-collapse">
             <thead>
               <tr className="bg-slate-50 text-left text-sm font-semibold uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-4">Name</th>
                 <th className="px-4 py-4">Phone</th>
-                <th className="px-4 py-4">Address</th>
-                <th className="px-4 py-4">Debt</th>
+                <th className="px-4 py-4">Total Purchase</th>
+                <th className="px-4 py-4">Paid Amount</th>
+                <th className="px-4 py-4">Balance Debt</th>
+                <th className="px-4 py-4">Last Payment Date</th>
                 <th className="px-4 py-4 text-center">Action</th>
               </tr>
             </thead>
 
             <tbody>
               {filtered.length ? (
-                filtered.map((customer) => (
-                  <tr
-                    key={customer.id}
-                    className="border-b border-slate-100 text-sm hover:bg-slate-50"
-                  >
-                    <td className="px-4 py-4 font-medium text-slate-900">
-                      {customer.name}
-                    </td>
+                filtered.map((customer) => {
+                  const totalPurchase = getCustomerTotalPurchase(customer);
+                  const customerPaid = getCustomerPaidAmount(customer);
+                  const debt = Number(customer.totalDebt || 0);
+                  const lastPaymentDate = getLastPaymentDate(customer);
 
-                    <td className="px-4 py-4 text-slate-700">
-                      {getCustomerPhone(customer) || '-'}
-                    </td>
+                  return (
+                    <tr
+                      key={customer.id}
+                      className="border-b border-slate-100 text-sm hover:bg-slate-50"
+                    >
+                      <td className="px-4 py-4 font-medium text-slate-900">
+                        {customer.name}
+                      </td>
 
-                    <td className="px-4 py-4 text-slate-700">
-                      {customer.address || '-'}
-                    </td>
+                      <td className="px-4 py-4 text-slate-700">
+                        {getCustomerPhone(customer) || '-'}
+                      </td>
 
-                    <td className="px-4 py-4 font-semibold text-slate-900">
-                      {formatCurrency(customer.totalDebt)}
-                    </td>
+                      <td className="px-4 py-4 font-semibold text-slate-900">
+                        {formatCurrency(totalPurchase)}
+                      </td>
 
-                    <td className="px-4 py-4 text-center">
-                      <button
-                        type="button"
-                        onClick={() => loadCustomerPurchases(customer)}
-                        className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
+                      <td className="px-4 py-4 font-semibold text-green-700">
+                        {formatCurrency(customerPaid)}
+                      </td>
+
+                      <td
+                        className={`px-4 py-4 font-bold ${
+                          debt > 0 ? 'text-red-700' : 'text-green-700'
+                        }`}
                       >
-                        View Details
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                        {formatCurrency(debt)}
+                      </td>
+
+                      <td className="px-4 py-4 text-slate-700">
+                        {lastPaymentDate}
+                      </td>
+
+                      <td className="px-4 py-4 text-center">
+                        <button
+                          type="button"
+                          onClick={() => loadCustomerPurchases(customer)}
+                          className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
+                        >
+                          View Details
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={7}
                     className="px-4 py-12 text-center text-slate-500"
                   >
                     No customers found
@@ -459,15 +577,6 @@ export default function CustomersPage() {
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <p className="text-xs font-semibold uppercase text-slate-400">
-                    Phone
-                  </p>
-                  <p className="mt-2 font-bold text-slate-900">
-                    {getCustomerPhone(selectedCustomer) || 'No phone'}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase text-slate-400">
                     Total Purchase
                   </p>
                   <p className="mt-2 font-bold text-slate-900">
@@ -475,9 +584,18 @@ export default function CustomersPage() {
                   </p>
                 </div>
 
+                <div className="rounded-2xl border border-green-200 bg-green-50 p-4">
+                  <p className="text-xs font-semibold uppercase text-green-500">
+                    Paid Amount
+                  </p>
+                  <p className="mt-2 font-bold text-green-700">
+                    {formatCurrency(paidAmount)}
+                  </p>
+                </div>
+
                 <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
                   <p className="text-xs font-semibold uppercase text-red-400">
-                    Current Debt
+                    Balance Debt
                   </p>
                   <p className="mt-2 font-bold text-red-700">
                     {formatCurrency(currentDebt)}

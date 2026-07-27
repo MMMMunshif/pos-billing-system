@@ -1,193 +1,393 @@
-const PAGE_WIDTH = 595.28;
-const PAGE_HEIGHT = 841.89;
-const MARGIN_X = 40;
-const TOP_Y = 800;
-const ROW_HEIGHT = 18;
-const BOTTOM_Y = 50;
+const SHOP_NAME = 'MCK';
+const SHOP_FULL_NAME = 'Multy Corner Kattankudy';
+const SHOP_ADDRESS = 'Main Street Kattankudy -06';
+const SHOP_CONTACT = '0771383333 / 0782036797';
 
-const toSafeText = (value) =>
-  String(value ?? '')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/[–—]/g, '-')
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[^\x20-\x7E]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function formatCurrency(value) {
+  const amount = Number(value || 0);
 
-const escapePdfText = (value) =>
-  toSafeText(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  return `LKR ${amount.toLocaleString('en-US')}`;
+}
 
-const truncate = (value, maxLength) => {
-  const text = toSafeText(value);
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
-};
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
 
-const text = (value, x, y, size = 10, font = 'F1') =>
-  `BT /${font} ${size} Tf ${x} ${y} Td (${escapePdfText(value)}) Tj ET`;
+function getProductShop(product) {
+  return (
+    product.shop ||
+    product.purchasedFrom ||
+    product.supplier ||
+    product.purchaseShop ||
+    '—'
+  );
+}
 
-const line = (x1, y1, x2, y2) => `0.5 w ${x1} ${y1} m ${x2} ${y2} l S`;
+function getProductBrand(product) {
+  return product.brand || product.productBrand || '—';
+}
 
-const rectFill = (x, y, width, height) => `${x} ${y} ${width} ${height} re f`;
+function getStockStatus(product) {
+  const stock = Number(product.currentStock || 0);
+  const minAlert = Number(product.minStockAlert || 0);
 
-const formatCurrency = (amount) =>
-  new Intl.NumberFormat('en-LK', {
-    style: 'currency',
-    currency: 'LKR',
-    minimumFractionDigits: 0,
-  }).format(Number(amount || 0));
+  if (stock <= 0) return 'Out of Stock';
+  if (stock <= minAlert) return 'Low Stock';
+  return 'Available';
+}
 
-const formatGeneratedAt = () =>
-  new Intl.DateTimeFormat('en-LK', {
+export function downloadProductStockPdf(products = [], options = {}) {
+  const shopFilter = options.shopFilter || '';
+  const generatedAt = new Date().toLocaleString('en-US', {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date());
+  });
 
-function buildProductStockPages(rows, options = {}) {
-  const shopLabel = options.shopFilter ? `Shop: ${options.shopFilter}` : 'Shop: All shops';
-  const pages = [];
-  let commands = [];
-  let y = TOP_Y;
-  let pageNo = 0;
+  const totalStock = products.reduce(
+    (sum, product) => sum + Number(product.currentStock || 0),
+    0
+  );
 
-  const columns = [
-    { title: 'Product', x: 40, width: 105, key: 'name', max: 18 },
-    { title: 'Brand', x: 150, width: 75, key: 'brand', max: 13 },
-    { title: 'Purchased From', x: 230, width: 120, key: 'shop', max: 20 },
-    { title: 'Stock', x: 355, width: 50, key: 'currentStock', max: 8 },
-    { title: 'Min Alert', x: 410, width: 60, key: 'minStockAlert', max: 8 },
-    { title: 'Price', x: 475, width: 80, key: 'sellingPrice', max: 14 },
-  ];
+  const totalValue = products.reduce(
+    (sum, product) =>
+      sum +
+      Number(product.currentStock || 0) * Number(product.sellingPrice || 0),
+    0
+  );
 
-  const addHeader = () => {
-    pageNo += 1;
-    y = TOP_Y;
-    commands = [];
-    commands.push('0 0 0 rg');
-    commands.push(text('Fancy Item Shop', MARGIN_X, y, 16, 'F2'));
-    y -= 22;
-    commands.push(text('Product Stock Report', MARGIN_X, y, 14, 'F2'));
-    y -= 18;
-    commands.push(text(`${shopLabel}    |    Generated: ${formatGeneratedAt()}`, MARGIN_X, y, 9, 'F1'));
-    y -= 12;
-    commands.push(line(MARGIN_X, y, PAGE_WIDTH - MARGIN_X, y));
-    y -= 22;
+  const rowsHtml = products.length
+    ? products
+        .map(
+          (product, index) => `
+            <tr>
+              <td>${index + 1}</td>
+              <td>${escapeHtml(product.name || '—')}</td>
+              <td>${escapeHtml(getProductBrand(product))}</td>
+              <td>${escapeHtml(getProductShop(product))}</td>
+              <td class="right">${Number(product.currentStock || 0)}</td>
+              <td class="right">${Number(product.minStockAlert || 0)}</td>
+              <td class="right">${formatCurrency(product.sellingPrice)}</td>
+              <td>${escapeHtml(getStockStatus(product))}</td>
+            </tr>
+          `
+        )
+        .join('')
+    : `
+        <tr>
+          <td colspan="8" class="empty">No product stock records found</td>
+        </tr>
+      `;
 
-    commands.push('0.93 0.96 1 rg');
-    commands.push(rectFill(MARGIN_X, y - 5, PAGE_WIDTH - MARGIN_X * 2, 18));
-    commands.push('0 0 0 rg');
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>${SHOP_NAME} Product Stock Report</title>
+        <style>
+          * {
+            box-sizing: border-box;
+          }
 
-    columns.forEach((col) => {
-      commands.push(text(col.title, col.x, y, 9, 'F2'));
-    });
-    y -= 14;
-    commands.push(line(MARGIN_X, y, PAGE_WIDTH - MARGIN_X, y));
-    y -= 16;
-  };
+          body {
+            margin: 0;
+            padding: 32px;
+            background: #f1f5f9;
+            color: #0f172a;
+            font-family: Arial, Helvetica, sans-serif;
+          }
 
-  const finishPage = () => {
-    commands.push(line(MARGIN_X, 38, PAGE_WIDTH - MARGIN_X, 38));
-    commands.push(text(`Page ${pageNo}`, PAGE_WIDTH - 85, 24, 8, 'F1'));
-    pages.push(commands.join('\n'));
-  };
+          .page {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: 0 15px 45px rgba(15, 23, 42, 0.12);
+          }
 
-  addHeader();
+          .top-band {
+            height: 12px;
+            background: linear-gradient(90deg, #2563eb, #0f172a, #16a34a);
+          }
 
-  if (!rows.length) {
-    commands.push(text('No product stock records found.', MARGIN_X, y, 10, 'F1'));
+          .header {
+            padding: 28px 34px 20px;
+            border-bottom: 1px solid #e2e8f0;
+          }
+
+          .shop-title {
+            margin: 0;
+            font-size: 34px;
+            font-weight: 900;
+            letter-spacing: 0.5px;
+            color: #0f172a;
+          }
+
+          .shop-subtitle {
+            margin: 6px 0 0;
+            font-size: 16px;
+            font-weight: 700;
+            color: #2563eb;
+          }
+
+          .shop-details {
+            margin: 8px 0 0;
+            font-size: 13px;
+            color: #475569;
+            line-height: 1.5;
+          }
+
+          .report-title {
+            margin-top: 22px;
+            display: inline-block;
+            border-radius: 999px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            padding: 10px 18px;
+            font-size: 18px;
+            font-weight: 900;
+          }
+
+          .meta {
+            margin-top: 14px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+          }
+
+          .meta-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 12px 14px;
+            background: #f8fafc;
+          }
+
+          .meta-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #64748b;
+            font-weight: 800;
+          }
+
+          .meta-value {
+            margin-top: 5px;
+            font-size: 14px;
+            font-weight: 800;
+            color: #0f172a;
+          }
+
+          .content {
+            padding: 26px 34px 30px;
+          }
+
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+          }
+
+          thead th {
+            background: #0f172a;
+            color: white;
+            padding: 13px 10px;
+            text-align: left;
+            font-weight: 800;
+            border: 1px solid #0f172a;
+          }
+
+          tbody td {
+            padding: 12px 10px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #1e293b;
+          }
+
+          tbody tr:nth-child(even) {
+            background: #f8fafc;
+          }
+
+          .right {
+            text-align: right;
+            font-weight: 700;
+          }
+
+          .empty {
+            text-align: center;
+            padding: 30px;
+            color: #64748b;
+          }
+
+          .summary {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+          }
+
+          .summary-card {
+            border-radius: 16px;
+            padding: 16px;
+            color: white;
+          }
+
+          .blue {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+          }
+
+          .green {
+            background: linear-gradient(135deg, #059669, #047857);
+          }
+
+          .purple {
+            background: linear-gradient(135deg, #9333ea, #7e22ce);
+          }
+
+          .summary-label {
+            font-size: 12px;
+            opacity: 0.85;
+            font-weight: 700;
+          }
+
+          .summary-value {
+            margin-top: 8px;
+            font-size: 22px;
+            font-weight: 900;
+          }
+
+          .footer {
+            margin-top: 26px;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 14px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+          }
+
+          @media print {
+            body {
+              background: white;
+              padding: 0;
+            }
+
+            .page {
+              box-shadow: none;
+              border-radius: 0;
+            }
+
+            @page {
+              size: A4 landscape;
+              margin: 12mm;
+            }
+
+            * {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+          }
+        </style>
+      </head>
+
+      <body>
+        <div class="page">
+          <div class="top-band"></div>
+
+          <div class="header">
+            <h1 class="shop-title">${SHOP_NAME}</h1>
+            <p class="shop-subtitle">${SHOP_FULL_NAME}</p>
+            <p class="shop-details">
+              ${SHOP_ADDRESS}<br />
+              Contact: ${SHOP_CONTACT}
+            </p>
+
+            <div class="report-title">Product Stock Report</div>
+
+            <div class="meta">
+              <div class="meta-card">
+                <div class="meta-label">Shop Filter</div>
+                <div class="meta-value">${escapeHtml(shopFilter || 'All shops')}</div>
+              </div>
+
+              <div class="meta-card">
+                <div class="meta-label">Generated At</div>
+                <div class="meta-value">${generatedAt}</div>
+              </div>
+
+              <div class="meta-card">
+                <div class="meta-label">Report Type</div>
+                <div class="meta-value">Product Stock</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="content">
+            <table>
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Product</th>
+                  <th>Brand</th>
+                  <th>Purchased From</th>
+                  <th>Stock</th>
+                  <th>Min Alert</th>
+                  <th>Price</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+
+            <div class="summary">
+              <div class="summary-card blue">
+                <div class="summary-label">Total Records</div>
+                <div class="summary-value">${products.length}</div>
+              </div>
+
+              <div class="summary-card green">
+                <div class="summary-label">Total Stock Quantity</div>
+                <div class="summary-value">${totalStock}</div>
+              </div>
+
+              <div class="summary-card purple">
+                <div class="summary-label">Stock Value</div>
+                <div class="summary-value">${formatCurrency(totalValue)}</div>
+              </div>
+            </div>
+
+            <div class="footer">
+              Generated by ${SHOP_NAME} Billing System • ${SHOP_FULL_NAME}
+            </div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = function () {
+            setTimeout(function () {
+              window.focus();
+              window.print();
+            }, 700);
+          };
+        </script>
+      </body>
+    </html>
+  `;
+
+  const printWindow = window.open('', '_blank', 'width=1200,height=800');
+
+  if (!printWindow) {
+    alert('Popup blocked. Please allow popups for this website and try again.');
+    return;
   }
 
-  rows.forEach((row) => {
-    if (y < BOTTOM_Y + ROW_HEIGHT) {
-      finishPage();
-      addHeader();
-    }
-
-    const values = {
-      name: truncate(row.name, 18),
-      brand: truncate(row.brand || '-', 13),
-      shop: truncate(row.shop || '-', 20),
-      currentStock: String(row.currentStock ?? 0),
-      minStockAlert: String(row.minStockAlert ?? 0),
-      sellingPrice: formatCurrency(row.sellingPrice),
-    };
-
-    columns.forEach((col) => {
-      commands.push(text(values[col.key], col.x, y, 9, 'F3'));
-    });
-    y -= ROW_HEIGHT;
-    commands.push(line(MARGIN_X, y + 7, PAGE_WIDTH - MARGIN_X, y + 7));
-  });
-
-  y -= 10;
-  const totalStock = rows.reduce((sum, row) => sum + Number(row.currentStock || 0), 0);
-  commands.push(text(`Total records: ${rows.length}    |    Total stock quantity: ${totalStock}`, MARGIN_X, y, 10, 'F2'));
-  finishPage();
-
-  return pages;
-}
-
-function createPdfBlob(pageContents) {
-  const objects = [];
-  const addObject = (content) => {
-    objects.push(content);
-    return objects.length;
-  };
-
-  const catalogId = addObject('');
-  const pagesId = addObject('');
-  const fontRegularId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-  const fontBoldId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
-  const fontMonoId = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
-
-  const pageIds = [];
-  pageContents.forEach((content) => {
-    const stream = `q\n${content}\nQ`;
-    const contentId = addObject(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
-    const pageId = addObject(
-      `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] ` +
-        `/Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R /F3 ${fontMonoId} 0 R >> >> ` +
-        `/Contents ${contentId} 0 R >>`
-    );
-    pageIds.push(pageId);
-  });
-
-  objects[catalogId - 1] = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
-  objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`;
-
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-
-  objects.forEach((object, index) => {
-    offsets.push(pdf.length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  });
-
-  const xrefOffset = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n`;
-  pdf += '0000000000 65535 f \n';
-  for (let i = 1; i <= objects.length; i += 1) {
-    pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
-  }
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-  return new Blob([pdf], { type: 'application/pdf' });
-}
-
-export function downloadProductStockPdf(rows, options = {}) {
-  const pageContents = buildProductStockPages(rows, options);
-  const blob = createPdfBlob(pageContents);
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const date = new Date().toISOString().slice(0, 10);
-  link.href = url;
-  link.download = `product-stock-report-${date}.pdf`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
 }
