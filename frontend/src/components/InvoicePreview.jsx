@@ -19,21 +19,119 @@ function normalizePhoneNumber(phone) {
   return number;
 }
 
+function getQuantity(item) {
+  return Number(item.quantity || 0);
+}
+
+function getOriginalPrice(item) {
+  return Number(item.originalPrice || item.unitPrice || 0);
+}
+
+function getUnitPrice(item) {
+  return Number(item.unitPrice || 0);
+}
+
+function getDiscountAmount(item) {
+  return Number(item.discountAmount || 0);
+}
+
+function getLineOriginalTotal(item) {
+  if (item.lineOriginalTotal != null) {
+    return Number(item.lineOriginalTotal || 0);
+  }
+
+  return getQuantity(item) * getOriginalPrice(item);
+}
+
+function getLineDiscountTotal(item) {
+  if (item.lineDiscountTotal != null) {
+    return Number(item.lineDiscountTotal || 0);
+  }
+
+  return getQuantity(item) * getDiscountAmount(item);
+}
+
+function getLineTotal(item) {
+  if (item.lineTotal != null) {
+    return Number(item.lineTotal || 0);
+  }
+
+  return getQuantity(item) * getUnitPrice(item);
+}
+
+function getOriginalSubtotal(invoice) {
+  if (invoice.originalSubtotal != null) {
+    return Number(invoice.originalSubtotal || 0);
+  }
+
+  return invoice.items.reduce((sum, item) => sum + getLineOriginalTotal(item), 0);
+}
+
+function getTotalDiscount(invoice) {
+  if (invoice.totalDiscount != null) {
+    return Number(invoice.totalDiscount || 0);
+  }
+
+  return invoice.items.reduce((sum, item) => sum + getLineDiscountTotal(item), 0);
+}
+
+function getFinalTotal(invoice) {
+  if (invoice.finalTotal != null) {
+    return Number(invoice.finalTotal || 0);
+  }
+
+  if (invoice.subtotal != null) {
+    return Number(invoice.subtotal || 0);
+  }
+
+  return Math.max(getOriginalSubtotal(invoice) - getTotalDiscount(invoice), 0);
+}
+
+function getDiscountLabel(item) {
+  const discountType = item.discountType || 'none';
+  const discountValue = Number(item.discountValue || 0);
+  const discountAmount = getDiscountAmount(item);
+
+  if (discountAmount <= 0 || discountType === 'none') {
+    return '—';
+  }
+
+  if (discountType === 'percentage') {
+    return `${discountValue}%`;
+  }
+
+  if (discountType === 'fixed') {
+    return formatCurrency(discountValue);
+  }
+
+  return formatCurrency(discountAmount);
+}
+
 function getInvoiceHtml(invoice) {
+  const originalSubtotal = getOriginalSubtotal(invoice);
+  const totalDiscount = getTotalDiscount(invoice);
+  const finalTotal = getFinalTotal(invoice);
+
   const itemRows = invoice.items
-    .map(
-      (item, index) => `
+    .map((item, index) => {
+      const quantity = getQuantity(item);
+      const originalPrice = getOriginalPrice(item);
+      const unitPrice = getUnitPrice(item);
+      const lineTotal = getLineTotal(item);
+      const discountLabel = getDiscountLabel(item);
+
+      return `
         <tr>
           <td>${index + 1}</td>
           <td class="item-name">${item.productName}</td>
-          <td class="right">${item.quantity}</td>
-          <td class="right">${formatCurrency(item.unitPrice)}</td>
-          <td class="right strong">${formatCurrency(
-            item.quantity * item.unitPrice
-          )}</td>
+          <td class="right">${quantity}</td>
+          <td class="right">${formatCurrency(originalPrice)}</td>
+          <td class="right discount">${discountLabel}</td>
+          <td class="right">${formatCurrency(unitPrice)}</td>
+          <td class="right strong">${formatCurrency(lineTotal)}</td>
         </tr>
-      `
-    )
+      `;
+    })
     .join('');
 
   return `
@@ -55,7 +153,7 @@ function getInvoiceHtml(invoice) {
           }
 
           .invoice-page {
-            max-width: 820px;
+            max-width: 940px;
             margin: 0 auto;
             background: #ffffff;
             border-radius: 18px;
@@ -155,15 +253,15 @@ function getInvoiceHtml(invoice) {
           thead th {
             background: #dc2626;
             color: #ffffff;
-            padding: 13px 12px;
-            font-size: 13px;
+            padding: 13px 10px;
+            font-size: 12px;
             text-align: left;
           }
 
           tbody td {
-            padding: 13px 12px;
+            padding: 13px 10px;
             border-bottom: 1px solid #e2e8f0;
-            font-size: 13px;
+            font-size: 12px;
             color: #0f172a;
           }
 
@@ -183,6 +281,11 @@ function getInvoiceHtml(invoice) {
             font-weight: 800;
           }
 
+          .discount {
+            color: #16a34a;
+            font-weight: 800;
+          }
+
           .summary-wrap {
             display: flex;
             justify-content: flex-end;
@@ -190,7 +293,7 @@ function getInvoiceHtml(invoice) {
           }
 
           .summary {
-            width: 330px;
+            width: 380px;
             border-radius: 16px;
             overflow: hidden;
             border: 1px solid #e2e8f0;
@@ -207,6 +310,12 @@ function getInvoiceHtml(invoice) {
 
           .summary-row:last-child {
             border-bottom: none;
+          }
+
+          .discount-row {
+            background: #f0fdf4;
+            color: #15803d;
+            font-weight: 800;
           }
 
           .summary-total {
@@ -252,14 +361,11 @@ function getInvoiceHtml(invoice) {
               max-width: none;
             }
 
-            .top-band {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-
+            .top-band,
             thead th,
             .summary-total,
-            .balance-row {
+            .balance-row,
+            .discount-row {
               print-color-adjust: exact;
               -webkit-print-color-adjust: exact;
             }
@@ -314,11 +420,13 @@ function getInvoiceHtml(invoice) {
             <table>
               <thead>
                 <tr>
-                  <th style="width: 50px;">#</th>
+                  <th style="width: 45px;">#</th>
                   <th>Item Name</th>
-                  <th class="right" style="width: 80px;">Qty</th>
-                  <th class="right" style="width: 150px;">Unit Price</th>
-                  <th class="right" style="width: 150px;">Amount</th>
+                  <th class="right" style="width: 65px;">Qty</th>
+                  <th class="right" style="width: 120px;">Price</th>
+                  <th class="right" style="width: 105px;">Discount</th>
+                  <th class="right" style="width: 120px;">Final Price</th>
+                  <th class="right" style="width: 130px;">Amount</th>
                 </tr>
               </thead>
 
@@ -330,8 +438,13 @@ function getInvoiceHtml(invoice) {
             <div class="summary-wrap">
               <div class="summary">
                 <div class="summary-row">
-                  <span>Subtotal</span>
-                  <b>${formatCurrency(invoice.subtotal)}</b>
+                  <span>Original Subtotal</span>
+                  <b>${formatCurrency(originalSubtotal)}</b>
+                </div>
+
+                <div class="summary-row discount-row">
+                  <span>Total Discount</span>
+                  <b>- ${formatCurrency(totalDiscount)}</b>
                 </div>
 
                 <div class="summary-row">
@@ -346,7 +459,7 @@ function getInvoiceHtml(invoice) {
 
                 <div class="summary-row summary-total">
                   <span>Total</span>
-                  <span>${formatCurrency(invoice.subtotal)}</span>
+                  <span>${formatCurrency(finalTotal)}</span>
                 </div>
               </div>
             </div>
@@ -363,17 +476,29 @@ function getInvoiceHtml(invoice) {
 }
 
 export default function InvoicePreview({ invoice, onClose }) {
+  const originalSubtotal = getOriginalSubtotal(invoice);
+  const totalDiscount = getTotalDiscount(invoice);
+  const finalTotal = getFinalTotal(invoice);
+
   const whatsappMessage = useMemo(() => {
     if (!invoice) return '';
 
     const itemLines = invoice.items
-      .map(
-        (item, index) =>
-          `${index + 1}. ${item.productName} - ${item.quantity} x ${formatCurrency(
-            item.unitPrice
-          )} = ${formatCurrency(item.quantity * item.unitPrice)}`
-      )
-      .join('\n');
+      .map((item, index) => {
+        const quantity = getQuantity(item);
+        const originalPrice = getOriginalPrice(item);
+        const unitPrice = getUnitPrice(item);
+        const lineTotal = getLineTotal(item);
+        const discountLabel = getDiscountLabel(item);
+
+        return `${index + 1}. ${item.productName}
+Qty: ${quantity}
+Price: ${formatCurrency(originalPrice)}
+Discount: ${discountLabel}
+Final Price: ${formatCurrency(unitPrice)}
+Amount: ${formatCurrency(lineTotal)}`;
+      })
+      .join('\n\n');
 
     return `${SHOP_NAME}
 ${SHOP_ADDRESS}
@@ -386,18 +511,25 @@ Customer: ${invoice.customerName || 'Walk-in Customer'}
 Items:
 ${itemLines}
 
-Subtotal: ${formatCurrency(invoice.subtotal)}
+Original Subtotal: ${formatCurrency(originalSubtotal)}
+Total Discount: - ${formatCurrency(totalDiscount)}
+Total: ${formatCurrency(finalTotal)}
 Paid: ${formatCurrency(invoice.paidAmount)}
 Balance: ${formatCurrency(invoice.balance)}
 Payment Type: ${invoice.paymentType}
 
 Thank you for shopping with us.`;
-  }, [invoice]);
+  }, [invoice, originalSubtotal, totalDiscount, finalTotal]);
 
   if (!invoice) return null;
 
   const handlePrint = () => {
-    const printWindow = window.open('', '_blank', 'width=900,height=950');
+    const printWindow = window.open('', '_blank', 'width=1000,height=950');
+
+    if (!printWindow) {
+      alert('Popup blocked. Please allow popups and try again.');
+      return;
+    }
 
     printWindow.document.write(getInvoiceHtml(invoice));
     printWindow.document.close();
@@ -431,8 +563,8 @@ Thank you for shopping with us.`;
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
-      <div className="max-h-[95vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 px-4 py-6">
+     <div className="relative z-[10000] max-h-[95vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
         <div className="flex justify-end px-6 pt-4">
           <button
             type="button"
@@ -500,40 +632,65 @@ Thank you for shopping with us.`;
                       <th className="px-3 py-3 text-left text-sm">#</th>
                       <th className="px-3 py-3 text-left text-sm">Item Name</th>
                       <th className="px-3 py-3 text-right text-sm">Qty</th>
-                      <th className="px-3 py-3 text-right text-sm">Unit Price</th>
+                      <th className="px-3 py-3 text-right text-sm">Price</th>
+                      <th className="px-3 py-3 text-right text-sm">Discount</th>
+                      <th className="px-3 py-3 text-right text-sm">Final Price</th>
                       <th className="px-3 py-3 text-right text-sm">Amount</th>
                     </tr>
                   </thead>
 
                   <tbody>
-                    {invoice.items.map((item, index) => (
-                      <tr
-                        key={index}
-                        className="border-b border-slate-200 even:bg-slate-50"
-                      >
-                        <td className="px-3 py-3 text-sm">{index + 1}</td>
-                        <td className="px-3 py-3 text-sm font-semibold">
-                          {item.productName}
-                        </td>
-                        <td className="px-3 py-3 text-right text-sm">
-                          {item.quantity}
-                        </td>
-                        <td className="px-3 py-3 text-right text-sm">
-                          {formatCurrency(item.unitPrice)}
-                        </td>
-                        <td className="px-3 py-3 text-right text-sm font-bold">
-                          {formatCurrency(item.quantity * item.unitPrice)}
-                        </td>
-                      </tr>
-                    ))}
+                    {invoice.items.map((item, index) => {
+                      const quantity = getQuantity(item);
+                      const originalPrice = getOriginalPrice(item);
+                      const unitPrice = getUnitPrice(item);
+                      const lineTotal = getLineTotal(item);
+                      const discountLabel = getDiscountLabel(item);
+
+                      return (
+                        <tr
+                          key={index}
+                          className="border-b border-slate-200 even:bg-slate-50"
+                        >
+                          <td className="px-3 py-3 text-sm">{index + 1}</td>
+                          <td className="px-3 py-3 text-sm font-semibold">
+                            {item.productName}
+                          </td>
+                          <td className="px-3 py-3 text-right text-sm">
+                            {quantity}
+                          </td>
+                          <td className="px-3 py-3 text-right text-sm">
+                            {formatCurrency(originalPrice)}
+                          </td>
+                          <td className="px-3 py-3 text-right text-sm font-bold text-green-700">
+                            {discountLabel}
+                          </td>
+                          <td className="px-3 py-3 text-right text-sm">
+                            {formatCurrency(unitPrice)}
+                          </td>
+                          <td className="px-3 py-3 text-right text-sm font-bold">
+                            {formatCurrency(lineTotal)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
-              <div className="mt-6 ml-auto w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200">
+              <div className="mt-6 ml-auto w-full max-w-md overflow-hidden rounded-2xl border border-slate-200">
                 <div className="flex justify-between border-b border-slate-200 px-4 py-3 text-sm">
-                  <span>Subtotal</span>
-                  <span className="font-bold">{formatCurrency(invoice.subtotal)}</span>
+                  <span>Original Subtotal</span>
+                  <span className="font-bold">
+                    {formatCurrency(originalSubtotal)}
+                  </span>
+                </div>
+
+                <div className="flex justify-between border-b border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">
+                  <span className="font-bold">Total Discount</span>
+                  <span className="font-extrabold">
+                    - {formatCurrency(totalDiscount)}
+                  </span>
                 </div>
 
                 <div className="flex justify-between border-b border-slate-200 px-4 py-3 text-sm">
@@ -553,7 +710,7 @@ Thank you for shopping with us.`;
                 <div className="flex justify-between bg-slate-900 px-4 py-4 text-white">
                   <span className="font-extrabold">Total</span>
                   <span className="font-extrabold">
-                    {formatCurrency(invoice.subtotal)}
+                    {formatCurrency(finalTotal)}
                   </span>
                 </div>
               </div>

@@ -13,7 +13,11 @@ const emptyItem = {
   productId: '',
   productName: '',
   quantity: 1,
+  originalPrice: '',
   unitPrice: '',
+  discountType: 'none',
+  discountValue: 0,
+  discountAmount: 0,
 };
 
 const IconBox = ({ children, color = 'blue' }) => {
@@ -59,6 +63,69 @@ function getProductName(product) {
   return product?.name || 'Product';
 }
 
+function normalizeBarcode(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function getProductOriginalPrice(product) {
+  return Number(product?.sellingPrice || 0);
+}
+
+function getProductFinalPrice(product) {
+  const sellingPrice = Number(product?.sellingPrice || 0);
+  const finalPrice = Number(product?.finalPrice || 0);
+
+  if (finalPrice > 0) {
+    return finalPrice;
+  }
+
+  return sellingPrice;
+}
+
+function getProductDiscountAmount(product) {
+  const sellingPrice = getProductOriginalPrice(product);
+  const finalPrice = getProductFinalPrice(product);
+
+  return Math.max(sellingPrice - finalPrice, 0);
+}
+
+function getDiscountLabel(item) {
+  const discountAmount = Number(item.discountAmount || 0);
+  const discountType = item.discountType || 'none';
+  const discountValue = Number(item.discountValue || 0);
+
+  if (discountAmount <= 0 || discountType === 'none') {
+    return 'No discount';
+  }
+
+  if (discountType === 'percentage') {
+    return `${discountValue}% off`;
+  }
+
+  if (discountType === 'fixed') {
+    return `${formatCurrency(discountValue)} off`;
+  }
+
+  return `${formatCurrency(discountAmount)} off`;
+}
+
+function buildSaleItemFromProduct(product, quantity = 1) {
+  const originalPrice = getProductOriginalPrice(product);
+  const unitPrice = getProductFinalPrice(product);
+  const discountAmount = getProductDiscountAmount(product);
+
+  return {
+    productId: product.id,
+    productName: product.name,
+    quantity,
+    originalPrice,
+    unitPrice,
+    discountType: product.discountType || 'none',
+    discountValue: Number(product.discountValue || 0),
+    discountAmount,
+  };
+}
+
 export default function SalesPage() {
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -71,6 +138,7 @@ export default function SalesPage() {
   const [saving, setSaving] = useState(false);
   const [invoice, setInvoice] = useState(null);
   const [lastInvoice, setLastInvoice] = useState(null);
+  const [barcodeInput, setBarcodeInput] = useState('');
 
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -80,8 +148,13 @@ export default function SalesPage() {
     const unsubscribeCustomers = subscribeCustomers(setCustomers);
 
     return () => {
-      unsubscribeProducts();
-      unsubscribeCustomers();
+      if (typeof unsubscribeProducts === 'function') {
+        unsubscribeProducts();
+      }
+
+      if (typeof unsubscribeCustomers === 'function') {
+        unsubscribeCustomers();
+      }
     };
   }, []);
 
@@ -98,9 +171,24 @@ export default function SalesPage() {
     }
   }, []);
 
+  const originalSubtotal = items.reduce((sum, item) => {
+    const quantity = Number(item.quantity) || 0;
+    const originalPrice = Number(item.originalPrice || item.unitPrice || 0);
+
+    return sum + quantity * originalPrice;
+  }, 0);
+
+  const totalDiscount = items.reduce((sum, item) => {
+    const quantity = Number(item.quantity) || 0;
+    const discountAmount = Number(item.discountAmount || 0);
+
+    return sum + quantity * discountAmount;
+  }, 0);
+
   const subtotal = items.reduce((sum, item) => {
     const quantity = Number(item.quantity) || 0;
     const unitPrice = Number(item.unitPrice) || 0;
+
     return sum + quantity * unitPrice;
   }, 0);
 
@@ -137,6 +225,97 @@ export default function SalesPage() {
 
   const hasStockError = items.some((item) => getItemStockError(item));
 
+  const handleBarcodeScan = () => {
+    const scannedBarcode = normalizeBarcode(barcodeInput);
+
+    if (!scannedBarcode) {
+      showToast('Scan or enter a barcode first', 'error');
+      return;
+    }
+
+    const product = products.find(
+      (item) => normalizeBarcode(item.barcode) === scannedBarcode
+    );
+
+    if (!product) {
+      showToast(`No product found for barcode: ${scannedBarcode}`, 'error');
+      setBarcodeInput('');
+      return;
+    }
+
+    const availableStock = getProductStock(product);
+
+    if (availableStock <= 0) {
+      showToast(`${getProductName(product)} is out of stock`, 'error');
+      setBarcodeInput('');
+      return;
+    }
+
+    setItems((prevItems) => {
+      const currentQty = prevItems.reduce((sum, item) => {
+        if (item.productId === product.id) {
+          return sum + (Number(item.quantity) || 0);
+        }
+
+        return sum;
+      }, 0);
+
+      if (currentQty + 1 > availableStock) {
+        setTimeout(() => {
+          showToast(
+            `Only ${availableStock} items available in stock for ${getProductName(product)}`,
+            'error'
+          );
+        }, 0);
+
+        return prevItems;
+      }
+
+      const nextItems = [...prevItems];
+
+      const existingIndex = nextItems.findIndex(
+        (item) => item.productId === product.id
+      );
+
+      if (existingIndex >= 0) {
+        nextItems[existingIndex] = {
+          ...nextItems[existingIndex],
+          quantity: Number(nextItems[existingIndex].quantity || 0) + 1,
+          productName: product.name,
+          originalPrice: getProductOriginalPrice(product),
+          unitPrice: getProductFinalPrice(product),
+          discountType: product.discountType || 'none',
+          discountValue: Number(product.discountValue || 0),
+          discountAmount: getProductDiscountAmount(product),
+        };
+      } else {
+        const emptyIndex = nextItems.findIndex((item) => !item.productId);
+        const newItem = buildSaleItemFromProduct(product, 1);
+
+        if (emptyIndex >= 0) {
+          nextItems[emptyIndex] = newItem;
+        } else {
+          nextItems.push(newItem);
+        }
+      }
+
+      setTimeout(() => {
+        showToast(`${getProductName(product)} added by barcode`);
+      }, 0);
+
+      return nextItems;
+    });
+
+    setBarcodeInput('');
+  };
+
+  const handleBarcodeKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      handleBarcodeScan();
+    }
+  };
+
   const updateItem = (index, field, value) => {
     setItems((prevItems) => {
       const nextItems = [...prevItems];
@@ -150,9 +329,7 @@ export default function SalesPage() {
         const product = products.find((p) => p.id === value);
 
         if (product) {
-          nextItems[index].productName = product.name;
-          nextItems[index].unitPrice = product.sellingPrice;
-          nextItems[index].quantity = 1;
+          nextItems[index] = buildSaleItemFromProduct(product, 1);
         }
       }
 
@@ -165,7 +342,9 @@ export default function SalesPage() {
   };
 
   const removeItemRow = (index) => {
-    setItems((prevItems) => prevItems.filter((_, itemIndex) => itemIndex !== index));
+    setItems((prevItems) =>
+      prevItems.filter((_, itemIndex) => itemIndex !== index)
+    );
   };
 
   const validateStockBeforeSale = (validItems) => {
@@ -207,7 +386,18 @@ export default function SalesPage() {
         productId: item.productId,
         productName: item.productName,
         quantity: Number(item.quantity),
-        unitPrice: Number(item.unitPrice),
+        originalPrice: Number(item.originalPrice || item.unitPrice || 0),
+        unitPrice: Number(item.unitPrice || 0),
+        discountType: item.discountType || 'none',
+        discountValue: Number(item.discountValue || 0),
+        discountAmount: Number(item.discountAmount || 0),
+        lineOriginalTotal:
+          Number(item.quantity || 0) *
+          Number(item.originalPrice || item.unitPrice || 0),
+        lineDiscountTotal:
+          Number(item.quantity || 0) * Number(item.discountAmount || 0),
+        lineTotal:
+          Number(item.quantity || 0) * Number(item.unitPrice || 0),
       }));
 
     if (!validItems.length) {
@@ -258,6 +448,10 @@ export default function SalesPage() {
           paymentType,
           paidAmount: actualPaidAmount,
           saleDate,
+          originalSubtotal,
+          totalDiscount,
+          subtotal,
+          finalTotal: subtotal,
         },
         validItems,
         user.uid
@@ -277,7 +471,10 @@ export default function SalesPage() {
             : '',
         paymentType,
         items: validItems,
+        originalSubtotal,
+        totalDiscount,
         subtotal,
+        finalTotal: subtotal,
         paidAmount: actualPaidAmount,
         balance: finalBalance,
       };
@@ -293,6 +490,7 @@ export default function SalesPage() {
       setCustomerId('');
       setPaymentType(PAYMENT_TYPES.CASH);
       setCustomerType(CUSTOMER_TYPES.WALK_IN);
+      setBarcodeInput('');
     } catch (error) {
       showToast(error.message, 'error');
     } finally {
@@ -304,7 +502,7 @@ export default function SalesPage() {
     <div className="min-h-full bg-slate-50">
       <PageHeader
         title="New Sale"
-        subtitle="Record a sale, generate invoice, print, and send bill through WhatsApp"
+        subtitle="Record a sale, scan barcode, apply discount, generate invoice, print, and send bill through WhatsApp"
       />
 
       <form
@@ -410,7 +608,7 @@ export default function SalesPage() {
                       Sale Items
                     </h2>
                     <p className="text-sm text-slate-500">
-                      Select products and check available stock before sale
+                      Scan barcode or select products manually
                     </p>
                   </div>
                 </div>
@@ -425,10 +623,43 @@ export default function SalesPage() {
               </div>
 
               <div className="p-6">
-                <div className="hidden grid-cols-[1fr_90px_140px_140px_44px] gap-3 px-2 pb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 md:grid">
+                <div className="mb-5 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <label className="mb-2 block text-sm font-bold text-blue-900">
+                    Scan Barcode
+                  </label>
+
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <input
+                      type="text"
+                      value={barcodeInput}
+                      onChange={(event) =>
+                        setBarcodeInput(normalizeBarcode(event.target.value))
+                      }
+                      onKeyDown={handleBarcodeKeyDown}
+                      placeholder="Scan or type barcode here..."
+                      className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold tracking-wide text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                      autoFocus
+                    />
+
+                    <button
+                      type="button"
+                      onClick={handleBarcodeScan}
+                      className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  <p className="mt-2 text-xs text-blue-700">
+                    Scan product sticker barcode. Discount will be applied automatically.
+                  </p>
+                </div>
+
+                <div className="hidden grid-cols-[1fr_90px_130px_130px_130px_44px] gap-3 px-2 pb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 md:grid">
                   <span>Product</span>
                   <span>Qty</span>
-                  <span>Unit Price</span>
+                  <span>Price</span>
+                  <span>Discount</span>
                   <span className="text-right">Line Total</span>
                   <span />
                 </div>
@@ -446,7 +677,7 @@ export default function SalesPage() {
                     return (
                       <div
                         key={index}
-                        className={`grid grid-cols-1 gap-3 rounded-2xl border p-4 transition md:grid-cols-[1fr_90px_140px_140px_44px] md:items-center ${
+                        className={`grid grid-cols-1 gap-3 rounded-2xl border p-4 transition md:grid-cols-[1fr_90px_130px_130px_130px_44px] md:items-center ${
                           stockError
                             ? 'border-red-200 bg-red-50'
                             : 'border-slate-200 bg-slate-50/70 hover:border-slate-300 hover:bg-slate-50'
@@ -467,6 +698,8 @@ export default function SalesPage() {
                             <option value="">Select product</option>
                             {products.map((product) => {
                               const stock = getProductStock(product);
+                              const finalPrice = getProductFinalPrice(product);
+                              const discountAmount = getProductDiscountAmount(product);
 
                               return (
                                 <option
@@ -474,8 +707,11 @@ export default function SalesPage() {
                                   value={product.id}
                                   disabled={stock <= 0}
                                 >
-                                  {product.name} | {formatCurrency(product.sellingPrice)} | Stock:{' '}
-                                  {stock}
+                                  {product.name} | {formatCurrency(finalPrice)} |
+                                  {discountAmount > 0
+                                    ? ` Discount: ${formatCurrency(discountAmount)} |`
+                                    : ' No Discount |'}{' '}
+                                  Stock: {stock}
                                 </option>
                               );
                             })}
@@ -487,8 +723,7 @@ export default function SalesPage() {
                                 stockError ? 'text-red-600' : 'text-green-600'
                               }`}
                             >
-                              {stockError ||
-                                `Available stock: ${availableStock}`}
+                              {stockError || `Available stock: ${availableStock}`}
                             </p>
                           )}
                         </div>
@@ -516,19 +751,26 @@ export default function SalesPage() {
 
                         <div>
                           <label className="mb-1 block text-xs font-medium text-slate-500 md:hidden">
-                            Unit Price
+                            Price
                           </label>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={item.unitPrice}
-                            onChange={(event) =>
-                              updateItem(index, 'unitPrice', event.target.value)
-                            }
-                            required
-                            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                          />
+                          <div className="rounded-xl bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 ring-1 ring-slate-200">
+                            {formatCurrency(item.unitPrice)}
+                          </div>
+
+                          {Number(item.discountAmount || 0) > 0 && (
+                            <p className="mt-1 text-xs text-slate-400 line-through">
+                              {formatCurrency(item.originalPrice)}
+                            </p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500 md:hidden">
+                            Discount
+                          </label>
+                          <div className="rounded-xl bg-white px-3 py-2.5 text-xs font-bold text-green-700 ring-1 ring-slate-200">
+                            {getDiscountLabel(item)}
+                          </div>
                         </div>
 
                         <div>
@@ -606,8 +848,24 @@ export default function SalesPage() {
                   </div>
                 )}
 
+                <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
+                  <div className="flex items-center justify-between text-sm text-slate-500">
+                    <span>Original Subtotal</span>
+                    <span className="font-bold text-slate-800">
+                      {formatCurrency(originalSubtotal)}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between text-sm text-green-600">
+                    <span>Total Discount</span>
+                    <span className="font-bold">
+                      - {formatCurrency(totalDiscount)}
+                    </span>
+                  </div>
+                </div>
+
                 <div className="rounded-2xl bg-gradient-to-br from-blue-600 to-blue-700 p-5 text-white shadow-lg shadow-blue-600/25">
-                  <p className="text-sm font-medium text-blue-100">Subtotal</p>
+                  <p className="text-sm font-medium text-blue-100">Final Total</p>
                   <p className="mt-2 text-3xl font-bold tracking-tight">
                     {formatCurrency(subtotal)}
                   </p>

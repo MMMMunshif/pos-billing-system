@@ -23,9 +23,60 @@ const generateMckBarcode = () => {
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   const timePart = String(Date.now()).slice(-6);
-  const randomPart = Math.floor(Math.random() * 999).toString().padStart(3, '0');
+  const randomPart = Math.floor(Math.random() * 999)
+    .toString()
+    .padStart(3, '0');
 
   return `MCK${year}${month}${day}${timePart}${randomPart}`;
+};
+
+const normalizeDiscountType = (value) => {
+  const type = String(value || 'none').trim().toLowerCase();
+
+  if (['none', 'percentage', 'fixed'].includes(type)) {
+    return type;
+  }
+
+  return 'none';
+};
+
+const calculateDiscountDetails = (sellingPrice, discountType, discountValue) => {
+  const price = Number(sellingPrice || 0);
+  const type = normalizeDiscountType(discountType);
+  const value = Number(discountValue || 0);
+
+  let discountAmount = 0;
+
+  if (type === 'percentage') {
+    if (value < 0 || value > 100) {
+      throw new HttpError(400, 'Percentage discount must be between 0 and 100');
+    }
+
+    discountAmount = (price * value) / 100;
+  } else if (type === 'fixed') {
+    if (value < 0) {
+      throw new HttpError(400, 'Fixed discount cannot be negative');
+    }
+
+    if (value > price) {
+      throw new HttpError(400, 'Fixed discount cannot be more than selling price');
+    }
+
+    discountAmount = value;
+  }
+
+  if (type === 'none') {
+    discountAmount = 0;
+  }
+
+  const finalPrice = Math.max(price - discountAmount, 0);
+
+  return {
+    discountType: type,
+    discountValue: type === 'none' ? 0 : value,
+    discountAmount,
+    finalPrice,
+  };
 };
 
 const productPayload = (data, { partial = false } = {}) => {
@@ -62,6 +113,20 @@ const productPayload = (data, { partial = false } = {}) => {
   if (!partial || data.sellingPrice !== undefined) {
     payload.sellingPrice = numberValue(data.sellingPrice, 'Selling price');
     payload.priceKey = Number(payload.sellingPrice || 0);
+  }
+
+  if (!partial || data.discountType !== undefined) {
+    payload.discountType = normalizeDiscountType(data.discountType);
+  }
+
+  if (!partial || data.discountValue !== undefined) {
+    const discountValue = Number(data.discountValue || 0);
+
+    if (Number.isNaN(discountValue) || discountValue < 0) {
+      throw new HttpError(400, 'Discount value must be a valid positive number');
+    }
+
+    payload.discountValue = discountValue;
   }
 
   if (!partial || data.currentStock !== undefined) {
@@ -139,6 +204,22 @@ async function findDuplicateBarcode(db, currentProductId, barcode) {
   });
 }
 
+async function findDuplicateBarcodeInTransaction(tx, productsRef, currentProductId, barcode) {
+  const normalizedBarcode = normalizeBarcode(barcode);
+
+  if (!normalizedBarcode) return null;
+
+  const snap = await tx.get(productsRef);
+
+  return snap.docs.find((doc) => {
+    if (doc.id === currentProductId) return false;
+
+    const data = doc.data();
+
+    return normalizeBarcode(data.barcode) === normalizedBarcode;
+  });
+}
+
 export async function listProducts(req, res) {
   const snap = await getDb()
     .collection(COLLECTIONS.PRODUCTS)
@@ -164,11 +245,11 @@ export async function createProduct(req, res) {
   const payload = productPayload(req.body);
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  const duplicateBarcode = await findDuplicateBarcode(db, null, payload.barcode);
-
-  if (duplicateBarcode) {
-    throw new HttpError(409, 'A product with this barcode already exists');
-  }
+  const discountDetails = calculateDiscountDetails(
+    payload.sellingPrice,
+    payload.discountType || 'none',
+    payload.discountValue || 0
+  );
 
   const result = await db.runTransaction(async (tx) => {
     const productsRef = db.collection(COLLECTIONS.PRODUCTS);
@@ -187,6 +268,9 @@ export async function createProduct(req, res) {
       const oldStock = Number(existingData.currentStock || 0);
       const newStock = Number(payload.currentStock || 0);
 
+      const finalBarcode =
+        existingData.barcode || payload.barcode || generateMckBarcode();
+
       tx.update(existingDoc.ref, {
         name: payload.name,
         nameLower: normalizeKey(payload.name),
@@ -197,13 +281,16 @@ export async function createProduct(req, res) {
         brand: payload.brand,
         brandLower: normalizeKey(payload.brand),
 
-        barcode: existingData.barcode || payload.barcode || generateMckBarcode(),
-        barcodeLower: normalizeBarcode(
-          existingData.barcode || payload.barcode || generateMckBarcode()
-        ).toLowerCase(),
+        barcode: normalizeBarcode(finalBarcode),
+        barcodeLower: normalizeBarcode(finalBarcode).toLowerCase(),
 
         sellingPrice: payload.sellingPrice,
         priceKey: Number(payload.sellingPrice || 0),
+
+        discountType: discountDetails.discountType,
+        discountValue: discountDetails.discountValue,
+        discountAmount: discountDetails.discountAmount,
+        finalPrice: discountDetails.finalPrice,
 
         currentStock: oldStock + newStock,
         minStockAlert: payload.minStockAlert || existingData.minStockAlert || 5,
@@ -214,16 +301,36 @@ export async function createProduct(req, res) {
       return { id: existingDoc.id, merged: true };
     }
 
+    const duplicateBarcode = await findDuplicateBarcodeInTransaction(
+      tx,
+      productsRef,
+      null,
+      payload.barcode
+    );
+
+    if (duplicateBarcode) {
+      throw new HttpError(409, 'A product with this barcode already exists');
+    }
+
+    const finalBarcode = payload.barcode || generateMckBarcode();
     const newRef = productsRef.doc();
 
     tx.set(newRef, {
       ...payload,
-      barcode: payload.barcode || generateMckBarcode(),
-      barcodeLower: normalizeBarcode(payload.barcode || generateMckBarcode()).toLowerCase(),
+
+      barcode: normalizeBarcode(finalBarcode),
+      barcodeLower: normalizeBarcode(finalBarcode).toLowerCase(),
+
       nameLower: normalizeKey(payload.name),
       brandLower: normalizeKey(payload.brand),
       shopLower: normalizeKey(payload.shop),
       priceKey: Number(payload.sellingPrice || 0),
+
+      discountType: discountDetails.discountType,
+      discountValue: discountDetails.discountValue,
+      discountAmount: discountDetails.discountAmount,
+      finalPrice: discountDetails.finalPrice,
+
       createdAt: now,
       updatedAt: now,
     });
@@ -260,6 +367,18 @@ export async function updateProduct(req, res) {
   const finalBarcode =
     payload.barcode ?? existingData.barcode ?? generateMckBarcode();
 
+  const finalDiscountType =
+    payload.discountType ?? existingData.discountType ?? 'none';
+
+  const finalDiscountValue =
+    payload.discountValue ?? existingData.discountValue ?? 0;
+
+  const discountDetails = calculateDiscountDetails(
+    finalSellingPrice,
+    finalDiscountType,
+    finalDiscountValue
+  );
+
   const duplicateProduct = await findDuplicateProduct(
     db,
     req.params.id,
@@ -288,12 +407,21 @@ export async function updateProduct(req, res) {
 
   await ref.update({
     ...payload,
+
     barcode: normalizeBarcode(finalBarcode),
     barcodeLower: normalizeBarcode(finalBarcode).toLowerCase(),
+
     nameLower: normalizeKey(finalName),
     brandLower: normalizeKey(finalBrand),
     shopLower: normalizeKey(finalShop),
+
     priceKey: Number(finalSellingPrice || 0),
+
+    discountType: discountDetails.discountType,
+    discountValue: discountDetails.discountValue,
+    discountAmount: discountDetails.discountAmount,
+    finalPrice: discountDetails.finalPrice,
+
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 

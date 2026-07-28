@@ -14,6 +14,8 @@ const emptyForm = {
   brand: '',
   barcode: '',
   sellingPrice: '',
+  discountType: 'none',
+  discountValue: '',
   currentStock: '',
   minStockAlert: '5',
   description: '',
@@ -29,6 +31,37 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function formatCurrency(value) {
+  const amount = Number(value || 0);
+  return `LKR ${amount.toLocaleString('en-US')}`;
+}
+
+function calculateDiscountAmount(price, discountType, discountValue) {
+  const sellingPrice = Number(price || 0);
+  const value = Number(discountValue || 0);
+
+  if (discountType === 'percentage') {
+    return Math.min((sellingPrice * value) / 100, sellingPrice);
+  }
+
+  if (discountType === 'fixed') {
+    return Math.min(value, sellingPrice);
+  }
+
+  return 0;
+}
+
+function calculateFinalPrice(price, discountType, discountValue) {
+  const sellingPrice = Number(price || 0);
+  const discountAmount = calculateDiscountAmount(
+    sellingPrice,
+    discountType,
+    discountValue
+  );
+
+  return Math.max(sellingPrice - discountAmount, 0);
 }
 
 function printBarcodeSticker(form) {
@@ -239,6 +272,8 @@ export default function ProductFormPage() {
             brand: product.brand || '',
             barcode: product.barcode || generateMckBarcode(),
             sellingPrice: product.sellingPrice ?? '',
+            discountType: product.discountType || 'none',
+            discountValue: product.discountValue ?? '',
             currentStock: product.currentStock ?? '',
             minStockAlert: product.minStockAlert ?? '5',
             description: product.description || '',
@@ -262,6 +297,16 @@ export default function ProductFormPage() {
     }));
   };
 
+  const handleDiscountTypeChange = (event) => {
+    const value = event.target.value;
+
+    setForm((prev) => ({
+      ...prev,
+      discountType: value,
+      discountValue: value === 'none' ? '' : prev.discountValue,
+    }));
+  };
+
   const handleGenerateBarcode = () => {
     setForm((prev) => ({
       ...prev,
@@ -273,11 +318,39 @@ export default function ProductFormPage() {
     event.preventDefault();
 
     const barcode = normalizeBarcode(form.barcode || generateMckBarcode());
+    const sellingPrice = Number(form.sellingPrice || 0);
+    const discountValue = Number(form.discountValue || 0);
+
+    if (form.discountType === 'percentage' && discountValue > 100) {
+      showToast('Percentage discount cannot be more than 100%', 'error');
+      return;
+    }
+
+    if (form.discountType === 'fixed' && discountValue > sellingPrice) {
+      showToast('Fixed discount cannot be more than selling price', 'error');
+      return;
+    }
+
+    const discountAmount = calculateDiscountAmount(
+      sellingPrice,
+      form.discountType,
+      discountValue
+    );
+
+    const finalPrice = calculateFinalPrice(
+      sellingPrice,
+      form.discountType,
+      discountValue
+    );
 
     const payload = {
       ...form,
       barcode,
-      sellingPrice: Number(form.sellingPrice || 0),
+      sellingPrice,
+      discountType: form.discountType,
+      discountValue: form.discountType === 'none' ? 0 : discountValue,
+      discountAmount,
+      finalPrice,
       currentStock: Number(form.currentStock || 0),
       minStockAlert: Number(form.minStockAlert || 0),
     };
@@ -301,13 +374,25 @@ export default function ProductFormPage() {
     }
   };
 
+  const discountAmount = calculateDiscountAmount(
+    form.sellingPrice,
+    form.discountType,
+    form.discountValue
+  );
+
+  const finalPrice = calculateFinalPrice(
+    form.sellingPrice,
+    form.discountType,
+    form.discountValue
+  );
+
   if (loading) return <LoadingSpinner />;
 
   return (
     <div>
       <PageHeader
         title={isEdit ? 'Edit Product' : 'Add Product'}
-        subtitle="Add product details with unique MCK barcode"
+        subtitle="Add product details with barcode and discount"
       />
 
       <form className="card form-card" onSubmit={handleSubmit}>
@@ -397,6 +482,62 @@ export default function ProductFormPage() {
               onChange={handleChange}
               required
             />
+          </div>
+
+          <div className="form-group">
+            <label>Discount Type</label>
+            <select
+              name="discountType"
+              value={form.discountType}
+              onChange={handleDiscountTypeChange}
+            >
+              <option value="none">No Discount</option>
+              <option value="percentage">Percentage Discount</option>
+              <option value="fixed">Fixed Amount Discount</option>
+            </select>
+          </div>
+
+          {form.discountType !== 'none' && (
+            <div className="form-group">
+              <label>
+                {form.discountType === 'percentage'
+                  ? 'Discount Percentage (%)'
+                  : 'Discount Amount (LKR)'}
+              </label>
+              <input
+                name="discountValue"
+                type="number"
+                min="0"
+                max={form.discountType === 'percentage' ? '100' : undefined}
+                step="0.01"
+                value={form.discountValue}
+                onChange={handleChange}
+                placeholder={
+                  form.discountType === 'percentage'
+                    ? 'e.g. 10'
+                    : 'e.g. 500'
+                }
+              />
+            </div>
+          )}
+
+          <div className="form-group">
+            <label>Final Selling Price</label>
+            <div
+              style={{
+                border: '1px solid #dbeafe',
+                background: '#eff6ff',
+                borderRadius: '12px',
+                padding: '12px',
+                fontWeight: '800',
+                color: '#1d4ed8',
+              }}
+            >
+              {formatCurrency(finalPrice)}
+            </div>
+            <small style={{ color: '#64748b' }}>
+              Discount: {formatCurrency(discountAmount)}
+            </small>
           </div>
 
           <div className="form-group">
