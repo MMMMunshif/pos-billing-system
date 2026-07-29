@@ -14,6 +14,7 @@ const ProductsPage = lazy(() => import('./pages/ProductsPage'));
 const ProductFormPage = lazy(() => import('./pages/ProductFormPage'));
 const AddStockPage = lazy(() => import('./pages/AddStockPage'));
 const SalesPage = lazy(() => import('./pages/SalesPage'));
+const SalesHistoryPage = lazy(() => import('./pages/SalesHistoryPage'));
 const CustomersPage = lazy(() => import('./pages/CustomersPage'));
 const CustomerDetailsPage = lazy(() => import('./pages/CustomerDetailsPage'));
 const PaymentPage = lazy(() => import('./pages/PaymentPage'));
@@ -98,6 +99,8 @@ export default function App() {
                 />
 
                 <Route path="sales" element={<SalesPage />} />
+
+                <Route path="sales-history" element={<SalesHistoryPage />} />
 
                 <Route path="customers" element={<CustomersPage />} />
 

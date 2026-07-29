@@ -11,7 +11,14 @@ export const createSale = async (saleData, items) => {
     method: 'POST',
     body: JSON.stringify({ sale: saleData, items }),
   });
+
   return result.saleId;
 };
 
 export const getSaleItems = (saleId) => apiRequest(`/sales/${saleId}/items`);
+
+export const cancelSale = (saleId, reason) =>
+  apiRequest(`/sales/${saleId}/cancel`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason }),
+  });

@@ -2,13 +2,43 @@ import { Router } from 'express';
 import { verifyToken } from '../middleware/authMiddleware.js';
 import { getCurrentUser } from '../controllers/authController.js';
 import { getDashboardSummary } from '../controllers/dashboardController.js';
-import { listProducts, getProduct, createProduct, updateProduct, deleteProduct, adjustProductStock } from '../controllers/productController.js';
-import { listCustomers, getCustomer, createCustomer, updateCustomer, deleteCustomer, getCustomerSales, getCustomerPayments, adjustCustomerDebt } from '../controllers/customerController.js';
-import { listStockPurchases, addStockPurchase } from '../controllers/stockController.js';
-import { listSales, createSale, getSaleItems } from '../controllers/salesController.js';
+
+import {
+  listProducts,
+  getProduct,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  adjustProductStock,
+} from '../controllers/productController.js';
+
+import {
+  listCustomers,
+  getCustomer,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer,
+  getCustomerSales,
+  getCustomerPayments,
+  adjustCustomerDebt,
+} from '../controllers/customerController.js';
+
+import {
+  listStockPurchases,
+  addStockPurchase,
+} from '../controllers/stockController.js';
+
+import {
+  listSales,
+  createSale,
+  getSaleItems,
+  cancelSale,
+} from '../controllers/salesController.js';
+
 import { recordPayment } from '../controllers/paymentController.js';
 
 const router = Router();
+
 router.use(verifyToken);
 
 router.get('/auth/me', getCurrentUser);
@@ -25,8 +55,11 @@ router.patch('/customers/:id/debt', adjustCustomerDebt);
 router.route('/customers/:id').get(getCustomer).put(updateCustomer).delete(deleteCustomer);
 
 router.route('/stock-purchases').get(listStockPurchases).post(addStockPurchase);
+
 router.route('/sales').get(listSales).post(createSale);
 router.get('/sales/:id/items', getSaleItems);
+router.patch('/sales/:id/cancel', cancelSale);
+
 router.post('/payments', recordPayment);
 
 export default router;
