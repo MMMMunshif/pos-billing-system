@@ -9,6 +9,7 @@ const adminNavItems = [
   { to: '/sales-history', label: 'Sales History', icon: '🧾' },
   { to: '/customers', label: 'Customers', icon: '👥' },
   { to: '/payments', label: 'Payments', icon: '💳' },
+  { to: '/expenses', label: 'Expenses', icon: '💸' },
   { to: '/reports', label: 'Reports', icon: '📋' },
 ];
 

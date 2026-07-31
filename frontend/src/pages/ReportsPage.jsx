@@ -12,15 +12,25 @@ import {
   getPurchaseHistoryReport,
   getUniqueShops,
   getUniquePurchasedProducts,
+  getDailyProfitReport,
+  getMonthlyProfitReport,
 } from '../services/reportService';
 import { getSaleItems } from '../services/salesService';
-import { formatCurrency, formatDateTime, toDateInputValue } from '../utils/helpers';
-import { downloadProductStockPdf } from '../utils/pdfExport';
+import {
+  formatCurrency,
+  formatDateTime,
+  toDateInputValue,
+} from '../utils/helpers';
+import {
+  downloadProductStockPdf,
+  downloadProfitReportPdf,
+} from '../utils/pdfExport';
 import { useToast } from '../context/toastContext';
 
 const REPORT_TYPES = [
   { id: 'daily', label: 'Daily Sales', icon: '📅' },
   { id: 'monthly', label: 'Monthly Sales', icon: '📆' },
+  { id: 'profit', label: 'Profit Report', icon: '📈' },
   { id: 'best', label: 'Best Selling', icon: '🏆' },
   { id: 'lowstock', label: 'Low Stock', icon: '⚠️' },
   { id: 'debt', label: 'Customer Debt', icon: '👥' },
@@ -34,8 +44,10 @@ function safeArray(value) {
   if (Array.isArray(value?.data)) return value.data;
   if (Array.isArray(value?.sales)) return value.sales;
   if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.rows)) return value.rows;
   if (Array.isArray(value?.data?.sales)) return value.data.sales;
   if (Array.isArray(value?.data?.items)) return value.data.items;
+  if (Array.isArray(value?.data?.rows)) return value.data.rows;
   return [];
 }
 
@@ -43,8 +55,21 @@ function getSaleId(sale) {
   return sale.id || sale.saleId || sale._id || '';
 }
 
+function getSaleStatus(sale) {
+  return String(sale.status || 'active').toLowerCase();
+}
+
+function isCancelledSale(sale) {
+  return getSaleStatus(sale) === 'cancelled';
+}
+
+function isActiveSale(sale) {
+  return !isCancelledSale(sale);
+}
+
 function getSaleTotal(sale) {
   return (
+    Number(sale.finalTotal) ||
     Number(sale.subtotal) ||
     Number(sale.totalAmount) ||
     Number(sale.total) ||
@@ -58,8 +83,11 @@ function getSalePaid(sale) {
 }
 
 function getSaleBalance(sale) {
+  if (sale.balance != null) return Number(sale.balance || 0);
+
   const total = getSaleTotal(sale);
   const paid = getSalePaid(sale);
+
   return Math.max(total - paid, 0);
 }
 
@@ -72,7 +100,60 @@ function getItemQty(item) {
 }
 
 function getItemPrice(item) {
-  return Number(item.unitPrice || item.sellingPrice || item.price || 0);
+  return Number(
+    item.unitPrice ||
+      item.finalPrice ||
+      item.sellingPrice ||
+      item.price ||
+      0
+  );
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(2)}%`;
+}
+
+function calculateSalesSummary(sales) {
+  return sales.reduce(
+    (acc, sale) => {
+      const total = getSaleTotal(sale);
+      const paid = getSalePaid(sale);
+      const balance = getSaleBalance(sale);
+      const paymentType = String(sale.paymentType || 'cash').toLowerCase();
+
+      acc.total += total;
+      acc.paid += paid;
+      acc.balance += balance;
+      acc.count += 1;
+
+      if (paymentType === 'cash') {
+        acc.cash += total;
+      } else {
+        acc.credit += balance;
+      }
+
+      return acc;
+    },
+    {
+      total: 0,
+      paid: 0,
+      balance: 0,
+      cash: 0,
+      credit: 0,
+      count: 0,
+    }
+  );
+}
+
+function calculateCancelledSummary(sales) {
+  return sales.reduce(
+    (acc, sale) => {
+      acc.count += 1;
+      acc.total += getSaleTotal(sale);
+      return acc;
+    },
+    { count: 0, total: 0 }
+  );
 }
 
 function getStockStatus(product) {
@@ -82,7 +163,8 @@ function getStockStatus(product) {
   if (stock <= 0) {
     return {
       label: 'Out of Stock',
-      className: 'rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-700',
+      className:
+        'rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-700',
     };
   }
 
@@ -123,6 +205,7 @@ function StatCard({ title, value, subtitle, icon, tone = 'blue' }) {
           <p className="mt-2 text-2xl font-black tracking-tight">{value}</p>
           {subtitle && <p className="mt-1 text-xs text-white/70">{subtitle}</p>}
         </div>
+
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 text-2xl">
           {icon}
         </div>
@@ -131,8 +214,19 @@ function StatCard({ title, value, subtitle, icon, tone = 'blue' }) {
   );
 }
 
-function SimpleBarChart({ title, subtitle, data, labelKey, valueKey, valuePrefix = '', valueSuffix = '' }) {
-  const maxValue = Math.max(...data.map((item) => Number(item[valueKey] || 0)), 1);
+function SimpleBarChart({
+  title,
+  subtitle,
+  data,
+  labelKey,
+  valueKey,
+  valuePrefix = '',
+  valueSuffix = '',
+}) {
+  const maxValue = Math.max(
+    ...data.map((item) => Number(item[valueKey] || 0)),
+    1
+  );
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -159,6 +253,7 @@ function SimpleBarChart({ title, subtitle, data, labelKey, valueKey, valuePrefix
                     {valueSuffix}
                   </span>
                 </div>
+
                 <div className="h-3 overflow-hidden rounded-full bg-slate-100">
                   <div
                     className="h-full rounded-full bg-blue-600"
@@ -184,6 +279,7 @@ export default function ReportsPage() {
   const [reportType, setReportType] = useState('daily');
   const [date, setDate] = useState(toDateInputValue());
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [profitPeriod, setProfitPeriod] = useState('monthly');
   const [shopFilter, setShopFilter] = useState('');
   const [productFilter, setProductFilter] = useState('');
 
@@ -196,6 +292,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     getUniqueShops().then(setShops).catch(() => setShops([]));
+
     getUniquePurchasedProducts()
       .then(setProductNames)
       .catch(() => setProductNames([]));
@@ -207,11 +304,14 @@ export default function ReportsPage() {
   const loadBestSellingProducts = async () => {
     const [year, selectedMonth] = month.split('-').map(Number);
     const monthlyReport = await getMonthlySalesReport(year, selectedMonth);
-    const sales = safeArray(monthlyReport.sales);
+    const sales = safeArray(monthlyReport.sales || monthlyReport);
+
+    const activeSales = sales.filter(isActiveSale);
+    const cancelledSales = sales.filter(isCancelledSale);
 
     const productMap = {};
 
-    for (const sale of sales) {
+    for (const sale of activeSales) {
       const saleId = getSaleId(sale);
       let items = safeArray(sale.items);
 
@@ -250,7 +350,11 @@ export default function ReportsPage() {
     );
 
     const totalQty = bestRows.reduce((sum, item) => sum + item.totalQty, 0);
-    const totalRevenue = bestRows.reduce((sum, item) => sum + item.totalRevenue, 0);
+    const totalRevenue = bestRows.reduce(
+      (sum, item) => sum + item.totalRevenue,
+      0
+    );
+    const cancelledSummary = calculateCancelledSummary(cancelledSales);
 
     setRows(bestRows);
     setSummary({
@@ -258,6 +362,8 @@ export default function ReportsPage() {
       totalQty,
       totalRevenue,
       month,
+      cancelledCount: cancelledSummary.count,
+      cancelledTotal: cancelledSummary.total,
     });
   };
 
@@ -270,30 +376,57 @@ export default function ReportsPage() {
       switch (reportType) {
         case 'daily': {
           const report = await getDailySalesReport(date);
-          const sales = safeArray(report.sales);
+          const sales = safeArray(report.sales || report);
+
+          const activeSales = sales.filter(isActiveSale);
+          const cancelledSales = sales.filter(isCancelledSale);
+
+          const activeSummary = calculateSalesSummary(activeSales);
+          const cancelledSummary = calculateCancelledSummary(cancelledSales);
 
           setSummary({
-            total: Number(report.totalSales || 0),
-            cash: Number(report.cashSales || 0),
-            credit: Number(report.creditSales || 0),
-            count: Number(report.count || sales.length || 0),
+            ...activeSummary,
+            cancelledCount: cancelledSummary.count,
+            cancelledTotal: cancelledSummary.total,
           });
-          setRows(sales);
+
+          setRows(activeSales);
           break;
         }
 
         case 'monthly': {
           const [year, selectedMonth] = month.split('-').map(Number);
           const report = await getMonthlySalesReport(year, selectedMonth);
-          const sales = safeArray(report.sales);
+          const sales = safeArray(report.sales || report);
+
+          const activeSales = sales.filter(isActiveSale);
+          const cancelledSales = sales.filter(isCancelledSale);
+
+          const activeSummary = calculateSalesSummary(activeSales);
+          const cancelledSummary = calculateCancelledSummary(cancelledSales);
 
           setSummary({
-            total: Number(report.totalSales || 0),
-            cash: Number(report.cashSales || 0),
-            credit: Number(report.creditSales || 0),
-            count: Number(report.count || sales.length || 0),
+            ...activeSummary,
+            cancelledCount: cancelledSummary.count,
+            cancelledTotal: cancelledSummary.total,
           });
-          setRows(sales);
+
+          setRows(activeSales);
+          break;
+        }
+
+        case 'profit': {
+          let report;
+
+          if (profitPeriod === 'daily') {
+            report = await getDailyProfitReport(date);
+          } else {
+            const [year, selectedMonth] = month.split('-').map(Number);
+            report = await getMonthlyProfitReport(year, selectedMonth);
+          }
+
+          setSummary(report);
+          setRows(safeArray(report.rows));
           break;
         }
 
@@ -303,19 +436,35 @@ export default function ReportsPage() {
         }
 
         case 'credit': {
-          const data = safeArray(await getCreditSalesReport());
-          const totalCredit = data.reduce((sum, sale) => sum + getSaleBalance(sale), 0);
+          const allCreditSales = safeArray(await getCreditSalesReport());
+
+          const activeCreditSales = allCreditSales
+            .filter(isActiveSale)
+            .filter((sale) => getSaleBalance(sale) > 0);
+
+          const cancelledSales = allCreditSales.filter(isCancelledSale);
+
+          const totalCredit = activeCreditSales.reduce(
+            (sum, sale) => sum + getSaleBalance(sale),
+            0
+          );
+
+          const cancelledSummary = calculateCancelledSummary(cancelledSales);
 
           setSummary({
-            count: data.length,
+            count: activeCreditSales.length,
             totalCredit,
+            cancelledCount: cancelledSummary.count,
+            cancelledTotal: cancelledSummary.total,
           });
-          setRows(data);
+
+          setRows(activeCreditSales);
           break;
         }
 
         case 'debt': {
           const data = safeArray(await getCustomerDebtReport());
+
           const totalDebt = data.reduce(
             (sum, customer) => sum + Number(customer.totalDebt || 0),
             0
@@ -325,33 +474,41 @@ export default function ReportsPage() {
             count: data.length,
             totalDebt,
           });
+
           setRows(data);
           break;
         }
 
         case 'lowstock': {
           const data = safeArray(await getLowStockReport(shopParam));
-          const outOfStock = data.filter((p) => Number(p.currentStock || 0) <= 0).length;
+
+          const outOfStock = data.filter(
+            (product) => Number(product.currentStock || 0) <= 0
+          ).length;
 
           setSummary({
             count: data.length,
             outOfStock,
             lowStock: data.length - outOfStock,
           });
+
           setRows(data);
           break;
         }
 
         case 'stock': {
           const data = safeArray(await getProductStockReport(shopParam));
+
           const totalStock = data.reduce(
             (sum, product) => sum + Number(product.currentStock || 0),
             0
           );
+
           const totalValue = data.reduce(
             (sum, product) =>
               sum +
-              Number(product.currentStock || 0) * Number(product.sellingPrice || 0),
+              Number(product.currentStock || 0) *
+                Number(product.sellingPrice || 0),
             0
           );
 
@@ -360,16 +517,21 @@ export default function ReportsPage() {
             totalStock,
             totalValue,
           });
+
           setRows(data);
           break;
         }
 
         case 'purchases': {
-          const data = safeArray(await getPurchaseHistoryReport(shopParam, productParam));
+          const data = safeArray(
+            await getPurchaseHistoryReport(shopParam, productParam)
+          );
+
           const totalQty = data.reduce(
             (sum, item) => sum + Number(item.quantity || 0),
             0
           );
+
           const totalPurchaseValue = data.reduce(
             (sum, item) =>
               sum +
@@ -382,6 +544,7 @@ export default function ReportsPage() {
             totalQty,
             totalPurchaseValue,
           });
+
           setRows(data);
 
           getUniqueShops().then(setShops).catch(() => {});
@@ -406,7 +569,11 @@ export default function ReportsPage() {
       label: 'Date',
       render: (row) => formatDateTime(row.saleDate || row.createdAt || row.date),
     },
-    { key: 'customerName', label: 'Customer', render: (row) => row.customerName || 'Walk-in' },
+    {
+      key: 'customerName',
+      label: 'Customer',
+      render: (row) => row.customerName || 'Walk-in',
+    },
     {
       key: 'subtotal',
       label: 'Total',
@@ -422,7 +589,64 @@ export default function ReportsPage() {
       label: 'Balance',
       render: (row) => formatCurrency(getSaleBalance(row)),
     },
-    { key: 'paymentType', label: 'Payment' },
+    {
+      key: 'paymentType',
+      label: 'Payment',
+      render: (row) => row.paymentType || 'cash',
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (row) => (
+        <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
+          {getSaleStatus(row)}
+        </span>
+      ),
+    },
+  ];
+
+  const profitColumns = [
+    { key: 'productName', label: 'Product' },
+    {
+      key: 'quantity',
+      label: 'Sold Qty',
+      render: (row) => Number(row.quantity || 0),
+    },
+    {
+      key: 'revenue',
+      label: 'Revenue',
+      render: (row) => formatCurrency(row.revenue),
+    },
+    {
+      key: 'cost',
+      label: 'Cost',
+      render: (row) => formatCurrency(row.cost),
+    },
+    {
+      key: 'discount',
+      label: 'Discount',
+      render: (row) => formatCurrency(row.discount),
+    },
+    {
+      key: 'profit',
+      label: 'Gross Profit',
+      render: (row) => (
+        <span
+          className={
+            Number(row.profit || 0) >= 0
+              ? 'font-bold text-green-700'
+              : 'font-bold text-red-700'
+          }
+        >
+          {formatCurrency(row.profit)}
+        </span>
+      ),
+    },
+    {
+      key: 'profitMargin',
+      label: 'Margin',
+      render: (row) => formatPercent(row.profitMargin),
+    },
   ];
 
   const bestColumns = [
@@ -480,6 +704,7 @@ export default function ReportsPage() {
       label: 'Status',
       render: (row) => {
         const status = getStockStatus(row);
+
         return <span className={status.className}>{status.label}</span>;
       },
     },
@@ -508,23 +733,35 @@ export default function ReportsPage() {
   ];
 
   const columns =
-    reportType === 'best'
-      ? bestColumns
-      : reportType === 'debt'
-        ? debtColumns
-        : reportType === 'purchases'
-          ? purchaseColumns
-          : reportType === 'lowstock' || reportType === 'stock'
-            ? productColumns
-            : salesColumns;
+    reportType === 'profit'
+      ? profitColumns
+      : reportType === 'best'
+        ? bestColumns
+        : reportType === 'debt'
+          ? debtColumns
+          : reportType === 'purchases'
+            ? purchaseColumns
+            : reportType === 'lowstock' || reportType === 'stock'
+              ? productColumns
+              : salesColumns;
 
   const showShopFilter =
-    reportType === 'lowstock' || reportType === 'stock' || reportType === 'purchases';
+    reportType === 'lowstock' ||
+    reportType === 'stock' ||
+    reportType === 'purchases';
 
   const showProductFilter = reportType === 'purchases';
 
-  const showDateFilter = reportType === 'daily';
-  const showMonthFilter = reportType === 'monthly' || reportType === 'best';
+  const showProfitPeriodFilter = reportType === 'profit';
+
+  const showDateFilter =
+    reportType === 'daily' ||
+    (reportType === 'profit' && profitPeriod === 'daily');
+
+  const showMonthFilter =
+    reportType === 'monthly' ||
+    reportType === 'best' ||
+    (reportType === 'profit' && profitPeriod === 'monthly');
 
   const handleDownloadProductStockPdf = () => {
     if (reportType !== 'stock') {
@@ -541,8 +778,30 @@ export default function ReportsPage() {
     showToast('Product stock PDF downloaded');
   };
 
+  const handleDownloadProfitPdf = () => {
+    if (reportType !== 'profit') {
+      showToast('Select Profit Report first', 'error');
+      return;
+    }
+
+    if (!summary) {
+      showToast('Generate the Profit Report first', 'error');
+      return;
+    }
+
+    const periodLabel =
+      profitPeriod === 'daily'
+        ? `Daily Profit - ${date}`
+        : `Monthly Profit - ${month}`;
+
+    downloadProfitReportPdf(rows, summary, { periodLabel });
+    showToast('Profit report PDF opened. Choose Save as PDF.');
+  };
+
   const paymentChartData = useMemo(() => {
-    if (!summary || (reportType !== 'daily' && reportType !== 'monthly')) return [];
+    if (!summary || (reportType !== 'daily' && reportType !== 'monthly')) {
+      return [];
+    }
 
     return [
       { name: 'Cash Sales', value: Number(summary.cash || 0) },
@@ -552,9 +811,19 @@ export default function ReportsPage() {
 
   const bestChartData = useMemo(() => {
     if (reportType !== 'best') return [];
+
     return rows.slice(0, 6).map((row) => ({
       name: row.productName,
       value: row.totalQty,
+    }));
+  }, [rows, reportType]);
+
+  const profitChartData = useMemo(() => {
+    if (reportType !== 'profit') return [];
+
+    return rows.slice(0, 6).map((row) => ({
+      name: row.productName,
+      value: Number(row.profit || 0),
     }));
   }, [rows, reportType]);
 
@@ -571,7 +840,7 @@ export default function ReportsPage() {
     <div>
       <PageHeader
         title="Reports"
-        subtitle="Professional admin reports for sales, stock, customers, and purchases"
+        subtitle="Professional admin reports for sales, profit, expenses, net profit, stock, customers, purchases, and cancelled sale tracking"
       />
 
       <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -600,6 +869,22 @@ export default function ReportsPage() {
 
       <div className="card mb-6">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          {showProfitPeriodFilter && (
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                Profit Period
+              </label>
+              <select
+                value={profitPeriod}
+                onChange={(event) => setProfitPeriod(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3"
+              >
+                <option value="daily">Daily Profit</option>
+                <option value="monthly">Monthly Profit</option>
+              </select>
+            </div>
+          )}
+
           {showDateFilter && (
             <div>
               <label className="mb-2 block text-sm font-semibold text-slate-700">
@@ -691,6 +976,19 @@ export default function ReportsPage() {
               </button>
             </div>
           )}
+
+          {reportType === 'profit' && (
+            <div className="flex items-end">
+              <button
+                type="button"
+                className="btn btn-secondary w-full"
+                onClick={handleDownloadProfitPdf}
+                disabled={loading || !summary}
+              >
+                Download Profit PDF
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -700,41 +998,48 @@ export default function ReportsPage() {
         <>
           {(reportType === 'daily' || reportType === 'monthly') && (
             <>
-              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
                 <StatCard
-                  title="Total Sales"
+                  title="Active Sales"
                   value={formatCurrency(summary.total)}
-                  subtitle="Total revenue"
+                  subtitle="Cancelled sales ignored"
                   icon="💰"
                   tone="blue"
                 />
                 <StatCard
                   title="Cash Sales"
                   value={formatCurrency(summary.cash)}
-                  subtitle="Paid by cash"
+                  subtitle="Active cash sales"
                   icon="💵"
                   tone="green"
                 />
                 <StatCard
-                  title="Credit Sales"
+                  title="Credit Balance"
                   value={formatCurrency(summary.credit)}
-                  subtitle="Credit / partial sales"
+                  subtitle="Active credit / partial balance"
                   icon="💳"
                   tone="orange"
                 />
                 <StatCard
                   title="Transactions"
                   value={summary.count}
-                  subtitle="Total sale records"
+                  subtitle="Active sale records"
                   icon="🧾"
                   tone="purple"
+                />
+                <StatCard
+                  title="Cancelled"
+                  value={summary.cancelledCount || 0}
+                  subtitle={formatCurrency(summary.cancelledTotal || 0)}
+                  icon="❌"
+                  tone="red"
                 />
               </div>
 
               <div className="mb-6">
                 <SimpleBarChart
                   title="Cash vs Credit Sales"
-                  subtitle="Payment type comparison for selected report"
+                  subtitle="Only active sales are included"
                   data={paymentChartData}
                   labelKey="name"
                   valueKey="value"
@@ -743,9 +1048,188 @@ export default function ReportsPage() {
             </>
           )}
 
+          {reportType === 'profit' && (
+            <>
+              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+                <StatCard
+                  title="Revenue"
+                  value={formatCurrency(summary.totalRevenue)}
+                  subtitle="Final sales revenue"
+                  icon="💰"
+                  tone="blue"
+                />
+                <StatCard
+                  title="Cost"
+                  value={formatCurrency(summary.totalCost)}
+                  subtitle="Purchase cost"
+                  icon="🛒"
+                  tone="orange"
+                />
+                <StatCard
+                  title="Expenses"
+                  value={formatCurrency(summary.totalExpenses)}
+                  subtitle={`${summary.expenseCount || 0} expense records`}
+                  icon="💸"
+                  tone="red"
+                />
+                <StatCard
+                  title="Gross Profit"
+                  value={formatCurrency(summary.grossProfit)}
+                  subtitle={`Gross margin: ${formatPercent(
+                    summary.grossProfitMargin || summary.profitMargin
+                  )}`}
+                  icon="📈"
+                  tone={Number(summary.grossProfit || 0) >= 0 ? 'green' : 'red'}
+                />
+                <StatCard
+                  title="Net Profit"
+                  value={formatCurrency(summary.netProfit)}
+                  subtitle={`Net margin: ${formatPercent(summary.netProfitMargin)}`}
+                  icon="✅"
+                  tone={Number(summary.netProfit || 0) >= 0 ? 'green' : 'red'}
+                />
+              </div>
+
+              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+                <StatCard
+                  title="Active Sales"
+                  value={summary.activeSalesCount || 0}
+                  subtitle="Cancelled ignored"
+                  icon="🧾"
+                  tone="slate"
+                />
+                <StatCard
+                  title="Sold Quantity"
+                  value={summary.totalQuantity || 0}
+                  subtitle="Total sold items"
+                  icon="📦"
+                  tone="blue"
+                />
+                <StatCard
+                  title="Cancelled Sales"
+                  value={summary.cancelledCount || 0}
+                  subtitle={formatCurrency(summary.cancelledTotal || 0)}
+                  icon="❌"
+                  tone="red"
+                />
+                <StatCard
+                  title="Report Period"
+                  value={profitPeriod === 'daily' ? 'Daily' : 'Monthly'}
+                  subtitle={
+                    profitPeriod === 'daily'
+                      ? `Date: ${date}`
+                      : `Month: ${month}`
+                  }
+                  icon="📊"
+                  tone="purple"
+                />
+              </div>
+
+              <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-base font-bold text-slate-900">
+                  Net Profit Calculation
+                </h3>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
+                  <div className="rounded-xl bg-blue-50 p-4">
+                    <p className="font-bold text-blue-700">Revenue</p>
+                    <p className="mt-1 text-lg font-black text-blue-900">
+                      {formatCurrency(summary.totalRevenue)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-orange-50 p-4">
+                    <p className="font-bold text-orange-700">Purchase Cost</p>
+                    <p className="mt-1 text-lg font-black text-orange-900">
+                      - {formatCurrency(summary.totalCost)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-red-50 p-4">
+                    <p className="font-bold text-red-700">Expenses</p>
+                    <p className="mt-1 text-lg font-black text-red-900">
+                      - {formatCurrency(summary.totalExpenses)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-green-50 p-4">
+                    <p className="font-bold text-green-700">Net Profit</p>
+                    <p className="mt-1 text-lg font-black text-green-900">
+                      {formatCurrency(summary.netProfit)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <SimpleBarChart
+                  title="Top Product Profit"
+                  subtitle="Top products by gross profit"
+                  data={profitChartData}
+                  labelKey="name"
+                  valueKey="value"
+                  valuePrefix="LKR "
+                />
+              </div>
+
+              {summary.expenseRows?.length > 0 && (
+                <div className="card mb-6">
+                  <h3 className="mb-4 text-lg font-extrabold text-slate-900">
+                    Expense Summary
+                  </h3>
+
+                  <div className="overflow-hidden rounded-2xl border border-slate-200">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="bg-slate-900 text-white">
+                          <th className="px-4 py-3 text-left text-sm">
+                            Category
+                          </th>
+                          <th className="px-4 py-3 text-right text-sm">
+                            Records
+                          </th>
+                          <th className="px-4 py-3 text-right text-sm">
+                            Amount
+                          </th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {summary.expenseRows.map((expense) => (
+                          <tr
+                            key={expense.category}
+                            className="border-b border-slate-200 even:bg-slate-50"
+                          >
+                            <td className="px-4 py-3 text-sm font-bold">
+                              {expense.categoryLabel}
+                            </td>
+                            <td className="px-4 py-3 text-right text-sm">
+                              {expense.count}
+                            </td>
+                            <td className="px-4 py-3 text-right text-sm font-extrabold text-red-700">
+                              {formatCurrency(expense.amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {rows.length === 0 && (
+                <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-700">
+                  Profit rows are empty. Create a new sale after updating backend
+                  profit fields. Old sales may not have purchase cost/profit
+                  fields.
+                </div>
+              )}
+            </>
+          )}
+
           {reportType === 'best' && (
             <>
-              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
                 <StatCard
                   title="Products Sold"
                   value={summary.count}
@@ -756,7 +1240,7 @@ export default function ReportsPage() {
                 <StatCard
                   title="Total Quantity"
                   value={summary.totalQty}
-                  subtitle="Items sold"
+                  subtitle="Active sales only"
                   icon="📦"
                   tone="green"
                 />
@@ -767,12 +1251,19 @@ export default function ReportsPage() {
                   icon="💰"
                   tone="purple"
                 />
+                <StatCard
+                  title="Cancelled Sales"
+                  value={summary.cancelledCount || 0}
+                  subtitle={formatCurrency(summary.cancelledTotal || 0)}
+                  icon="❌"
+                  tone="red"
+                />
               </div>
 
               <div className="mb-6">
                 <SimpleBarChart
                   title="Top Best Selling Products"
-                  subtitle="Top products by sold quantity"
+                  subtitle="Cancelled sales are ignored"
                   data={bestChartData}
                   labelKey="name"
                   valueKey="value"
@@ -880,11 +1371,11 @@ export default function ReportsPage() {
           )}
 
           {reportType === 'credit' && (
-            <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
               <StatCard
                 title="Credit Sales"
                 value={summary.count}
-                subtitle="Credit sale records"
+                subtitle="Active credit sale records"
                 icon="💳"
                 tone="orange"
               />
@@ -894,6 +1385,13 @@ export default function ReportsPage() {
                 subtitle="Pending amount"
                 icon="⚠️"
                 tone="red"
+              />
+              <StatCard
+                title="Cancelled Credit"
+                value={summary.cancelledCount || 0}
+                subtitle={formatCurrency(summary.cancelledTotal || 0)}
+                icon="❌"
+                tone="slate"
               />
             </div>
           )}
@@ -925,7 +1423,11 @@ export default function ReportsPage() {
           )}
 
           <div className="card">
-            <DataTable columns={columns} data={rows} emptyMessage="No records found" />
+            <DataTable
+              columns={columns}
+              data={rows}
+              emptyMessage="No records found"
+            />
           </div>
         </>
       )}

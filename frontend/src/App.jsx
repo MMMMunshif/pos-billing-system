@@ -19,6 +19,7 @@ const CustomersPage = lazy(() => import('./pages/CustomersPage'));
 const CustomerDetailsPage = lazy(() => import('./pages/CustomerDetailsPage'));
 const PaymentPage = lazy(() => import('./pages/PaymentPage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
+const ExpensesPage = lazy(() => import('./pages/ExpensesPage'));
 
 function DashboardRouter() {
   const { userProfile } = useAuth();
@@ -111,6 +112,15 @@ export default function App() {
                   element={
                     <AdminOnly>
                       <PaymentPage />
+                    </AdminOnly>
+                  }
+                />
+
+                <Route
+                  path="expenses"
+                  element={
+                    <AdminOnly>
+                      <ExpensesPage />
                     </AdminOnly>
                   }
                 />

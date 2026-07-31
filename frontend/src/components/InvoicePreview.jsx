@@ -19,6 +19,19 @@ function normalizePhoneNumber(phone) {
   return number;
 }
 
+function isCancelledInvoice(invoice) {
+  return String(invoice?.status || '').toLowerCase() === 'cancelled';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function getQuantity(item) {
   return Number(item.quantity || 0);
 }
@@ -108,6 +121,7 @@ function getDiscountLabel(item) {
 }
 
 function getInvoiceHtml(invoice) {
+  const cancelled = isCancelledInvoice(invoice);
   const originalSubtotal = getOriginalSubtotal(invoice);
   const totalDiscount = getTotalDiscount(invoice);
   const finalTotal = getFinalTotal(invoice);
@@ -123,10 +137,10 @@ function getInvoiceHtml(invoice) {
       return `
         <tr>
           <td>${index + 1}</td>
-          <td class="item-name">${item.productName}</td>
+          <td class="item-name">${escapeHtml(item.productName)}</td>
           <td class="right">${quantity}</td>
           <td class="right">${formatCurrency(originalPrice)}</td>
-          <td class="right discount">${discountLabel}</td>
+          <td class="right discount">${escapeHtml(discountLabel)}</td>
           <td class="right">${formatCurrency(unitPrice)}</td>
           <td class="right strong">${formatCurrency(lineTotal)}</td>
         </tr>
@@ -138,7 +152,7 @@ function getInvoiceHtml(invoice) {
     <!DOCTYPE html>
     <html>
       <head>
-        <title>${invoice.invoiceNo}</title>
+        <title>${escapeHtml(invoice.invoiceNo)}</title>
         <style>
           * {
             box-sizing: border-box;
@@ -165,6 +179,31 @@ function getInvoiceHtml(invoice) {
           .top-band {
             height: 12px;
             background: linear-gradient(90deg, #dc2626, #f97316, #2563eb);
+          }
+
+          .cancelled-stamp {
+            margin: 20px 34px 0;
+            border: 3px solid #dc2626;
+            color: #dc2626;
+            background: #fef2f2;
+            border-radius: 16px;
+            padding: 14px 18px;
+            text-align: center;
+            font-size: 28px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            transform: rotate(-1deg);
+          }
+
+          .cancel-reason {
+            margin-top: 14px;
+            border-radius: 12px;
+            border: 1px solid #fecaca;
+            background: #fef2f2;
+            color: #991b1b;
+            padding: 12px 14px;
+            font-size: 13px;
+            font-weight: 700;
           }
 
           .header {
@@ -365,7 +404,9 @@ function getInvoiceHtml(invoice) {
             thead th,
             .summary-total,
             .balance-row,
-            .discount-row {
+            .discount-row,
+            .cancelled-stamp,
+            .cancel-reason {
               print-color-adjust: exact;
               -webkit-print-color-adjust: exact;
             }
@@ -377,6 +418,12 @@ function getInvoiceHtml(invoice) {
         <div class="invoice-page">
           <div class="top-band"></div>
 
+          ${
+            cancelled
+              ? `<div class="cancelled-stamp">CANCELLED INVOICE</div>`
+              : ''
+          }
+
           <div class="header">
             <div>
               <h1 class="shop-name">${SHOP_NAME}</h1>
@@ -387,10 +434,10 @@ function getInvoiceHtml(invoice) {
             </div>
 
             <div class="invoice-title">
-              <h2>INVOICE</h2>
+              <h2>${cancelled ? 'INVOICE COPY' : 'INVOICE'}</h2>
               <div class="invoice-meta">
-                <b>${invoice.invoiceNo}</b><br />
-                ${invoice.saleDate}
+                <b>${escapeHtml(invoice.invoiceNo)}</b><br />
+                ${escapeHtml(invoice.saleDate)}
               </div>
             </div>
           </div>
@@ -400,11 +447,11 @@ function getInvoiceHtml(invoice) {
               <div>
                 <div class="label">Bill To</div>
                 <div class="customer-name">
-                  ${invoice.customerName || 'Walk-in Customer'}
+                  ${escapeHtml(invoice.customerName || 'Walk-in Customer')}
                 </div>
                 ${
                   invoice.customerPhone
-                    ? `<div class="small">Phone: ${invoice.customerPhone}</div>`
+                    ? `<div class="small">Phone: ${escapeHtml(invoice.customerPhone)}</div>`
                     : ''
                 }
               </div>
@@ -412,10 +459,18 @@ function getInvoiceHtml(invoice) {
               <div style="text-align: right;">
                 <div class="label">Payment Type</div>
                 <div class="small">
-                  <b>${invoice.paymentType}</b>
+                  <b>${escapeHtml(invoice.paymentType)}</b>
                 </div>
               </div>
             </div>
+
+            ${
+              cancelled
+                ? `<div class="cancel-reason">Cancel Reason: ${escapeHtml(
+                    invoice.cancelReason || 'Sale cancelled'
+                  )}</div>`
+                : ''
+            }
 
             <table>
               <thead>
@@ -465,7 +520,9 @@ function getInvoiceHtml(invoice) {
             </div>
 
             <div class="footer">
-              <div class="thank">Thank you for shopping with us.</div>
+              <div class="thank">
+                ${cancelled ? 'This invoice has been cancelled.' : 'Thank you for shopping with us.'}
+              </div>
               <div>Generated by Multy Corner Kattankudy Billing System</div>
             </div>
           </div>
@@ -482,6 +539,8 @@ export default function InvoicePreview({ invoice, onClose }) {
 
   const whatsappMessage = useMemo(() => {
     if (!invoice) return '';
+
+    const cancelled = isCancelledInvoice(invoice);
 
     const itemLines = invoice.items
       .map((item, index) => {
@@ -508,7 +567,14 @@ Invoice No: ${invoice.invoiceNo}
 Date: ${invoice.saleDate}
 Customer: ${invoice.customerName || 'Walk-in Customer'}
 
-Items:
+${
+  cancelled
+    ? `Status: CANCELLED
+Reason: ${invoice.cancelReason || 'Sale cancelled'}
+
+`
+    : ''
+}Items:
 ${itemLines}
 
 Original Subtotal: ${formatCurrency(originalSubtotal)}
@@ -518,10 +584,12 @@ Paid: ${formatCurrency(invoice.paidAmount)}
 Balance: ${formatCurrency(invoice.balance)}
 Payment Type: ${invoice.paymentType}
 
-Thank you for shopping with us.`;
+${cancelled ? 'This invoice has been cancelled.' : 'Thank you for shopping with us.'}`;
   }, [invoice, originalSubtotal, totalDiscount, finalTotal]);
 
   if (!invoice) return null;
+
+  const cancelled = isCancelledInvoice(invoice);
 
   const handlePrint = () => {
     const printWindow = window.open('', '_blank', 'width=1000,height=950');
@@ -564,7 +632,7 @@ Thank you for shopping with us.`;
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 px-4 py-6">
-     <div className="relative z-[10000] max-h-[95vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+      <div className="relative z-[10000] max-h-[95vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
         <div className="flex justify-end px-6 pt-4">
           <button
             type="button"
@@ -579,6 +647,20 @@ Thank you for shopping with us.`;
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="h-3 bg-gradient-to-r from-red-600 via-orange-500 to-blue-600"></div>
 
+            {cancelled && (
+              <div className="mx-6 mt-5 rounded-2xl border-4 border-red-600 bg-red-50 px-6 py-4 text-center">
+                <p className="text-3xl font-black tracking-widest text-red-600">
+                  CANCELLED INVOICE
+                </p>
+
+                {invoice.cancelReason && (
+                  <p className="mt-2 text-sm font-bold text-red-700">
+                    Reason: {invoice.cancelReason}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-between gap-6 border-b border-slate-200 p-6">
               <div>
                 <h1 className="text-2xl font-extrabold text-slate-900">
@@ -590,7 +672,7 @@ Thank you for shopping with us.`;
 
               <div className="text-right">
                 <h2 className="text-2xl font-extrabold tracking-wide text-red-600">
-                  INVOICE
+                  {cancelled ? 'INVOICE COPY' : 'INVOICE'}
                 </h2>
                 <p className="mt-2 text-sm font-semibold text-slate-600">
                   {invoice.invoiceNo}
@@ -625,6 +707,12 @@ Thank you for shopping with us.`;
                 </div>
               </div>
 
+              {cancelled && (
+                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                  Cancel Reason: {invoice.cancelReason || 'Sale cancelled'}
+                </div>
+              )}
+
               <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
                 <table className="w-full border-collapse">
                   <thead>
@@ -634,7 +722,9 @@ Thank you for shopping with us.`;
                       <th className="px-3 py-3 text-right text-sm">Qty</th>
                       <th className="px-3 py-3 text-right text-sm">Price</th>
                       <th className="px-3 py-3 text-right text-sm">Discount</th>
-                      <th className="px-3 py-3 text-right text-sm">Final Price</th>
+                      <th className="px-3 py-3 text-right text-sm">
+                        Final Price
+                      </th>
                       <th className="px-3 py-3 text-right text-sm">Amount</th>
                     </tr>
                   </thead>
@@ -717,7 +807,9 @@ Thank you for shopping with us.`;
 
               <div className="mt-8 rounded-2xl bg-slate-50 p-4 text-center text-sm text-slate-500">
                 <p className="font-bold text-slate-900">
-                  Thank you for shopping with us.
+                  {cancelled
+                    ? 'This invoice has been cancelled.'
+                    : 'Thank you for shopping with us.'}
                 </p>
                 <p>Generated by Multy Corner Kattankudy Billing System</p>
               </div>

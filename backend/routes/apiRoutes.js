@@ -37,6 +37,13 @@ import {
 
 import { recordPayment } from '../controllers/paymentController.js';
 
+import {
+  listExpenses,
+  createExpense,
+  updateExpense,
+  deleteExpense,
+} from '../controllers/expenseController.js';
+
 const router = Router();
 
 router.use(verifyToken);
@@ -61,5 +68,8 @@ router.get('/sales/:id/items', getSaleItems);
 router.patch('/sales/:id/cancel', cancelSale);
 
 router.post('/payments', recordPayment);
+
+router.route('/expenses').get(listExpenses).post(createExpense);
+router.route('/expenses/:id').put(updateExpense).delete(deleteExpense);
 
 export default router;

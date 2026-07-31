@@ -25,6 +25,15 @@ function calculateBalance(total, paidAmount) {
   return Math.max(Number(total || 0) - Number(paidAmount || 0), 0);
 }
 
+function getProductPurchasePrice(product) {
+  return Number(
+    product.avgPurchasePrice ??
+      product.lastPurchasePrice ??
+      product.purchasePrice ??
+      0
+  );
+}
+
 export async function listSales(req, res) {
   let query = getDb()
     .collection(COLLECTIONS.SALES)
@@ -159,10 +168,13 @@ export async function createSale(req, res) {
         );
       }
 
+      const purchasePrice = getProductPurchasePrice(product);
+
       resolvedItems.push({
         ...item,
         productRef,
         productName: product.name,
+        purchasePrice,
         available,
       });
     }
@@ -181,6 +193,13 @@ export async function createSale(req, res) {
       (sum, item) => sum + item.quantity * item.unitPrice,
       0
     );
+
+    const totalCost = resolvedItems.reduce(
+      (sum, item) => sum + item.quantity * Number(item.purchasePrice || 0),
+      0
+    );
+
+    const grossProfit = subtotal - totalCost;
 
     let paidAmount =
       paymentTypeInput === 'cash'
@@ -218,6 +237,10 @@ export async function createSale(req, res) {
       totalDiscount,
       subtotal,
       finalTotal: subtotal,
+
+      totalCost,
+      grossProfit,
+
       paidAmount,
       balance,
 
@@ -229,6 +252,12 @@ export async function createSale(req, res) {
     });
 
     resolvedItems.forEach((item) => {
+      const lineOriginalTotal = item.quantity * item.originalPrice;
+      const lineDiscountTotal = item.quantity * item.discountAmount;
+      const lineCostTotal = item.quantity * item.purchasePrice;
+      const lineTotal = item.quantity * item.unitPrice;
+      const lineProfit = lineTotal - lineCostTotal;
+
       tx.update(item.productRef, {
         currentStock: item.available - item.quantity,
         updatedAt: now,
@@ -245,14 +274,17 @@ export async function createSale(req, res) {
 
         originalPrice: item.originalPrice,
         unitPrice: item.unitPrice,
+        purchasePrice: item.purchasePrice,
 
         discountType: item.discountType,
         discountValue: item.discountValue,
         discountAmount: item.discountAmount,
 
-        lineOriginalTotal: item.quantity * item.originalPrice,
-        lineDiscountTotal: item.quantity * item.discountAmount,
-        lineTotal: item.quantity * item.unitPrice,
+        lineOriginalTotal,
+        lineDiscountTotal,
+        lineCostTotal,
+        lineTotal,
+        lineProfit,
 
         status: 'active',
         createdAt: now,
@@ -273,6 +305,8 @@ export async function createSale(req, res) {
       totalDiscount,
       subtotal,
       finalTotal: subtotal,
+      totalCost,
+      grossProfit,
       paidAmount,
       balance,
       paymentType,
