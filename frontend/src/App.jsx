@@ -59,13 +59,9 @@ export default function App() {
         <BrowserRouter>
           <Suspense fallback={<LoadingSpinner message="Loading page..." />}>
             <Routes>
-              {/* Public landing page */}
               <Route path="/" element={<HomePage />} />
-
-              {/* Public login page */}
               <Route path="/login" element={<LoginPage />} />
 
-              {/* Protected system pages */}
               <Route
                 element={
                   <ProtectedRoute>
@@ -74,7 +70,6 @@ export default function App() {
                 }
               >
                 <Route path="/dashboard" element={<DashboardRouter />} />
-
                 <Route path="/products" element={<ProductsPage />} />
 
                 <Route
@@ -105,15 +100,9 @@ export default function App() {
                 />
 
                 <Route path="/sales" element={<SalesPage />} />
-
                 <Route path="/sales-history" element={<SalesHistoryPage />} />
-
                 <Route path="/customers" element={<CustomersPage />} />
-
-                <Route
-                  path="/customers/:id"
-                  element={<CustomerDetailsPage />}
-                />
+                <Route path="/customers/:id" element={<CustomerDetailsPage />} />
 
                 <Route
                   path="/payments"
@@ -143,7 +132,6 @@ export default function App() {
                 />
               </Route>
 
-              {/* Unknown routes go to landing page */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
