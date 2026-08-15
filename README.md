@@ -84,3 +84,13 @@ This version adds:
 - Green Live Active status button in the top bar.
 - Product duplicate logic based on name + brand + purchased-from shop + selling price.
 - Online deployment guide in `ONLINE_DEPLOYMENT_AND_NEW_FEATURES.md`.
+
+
+## Contact
+
+**Developer:** Mohamed Munshif  
+**GitHub:** [MMMMunshif](https://github.com/MMMMunshif)  
+**LinkedIn:** [Mohamed Munshif](https://www.linkedin.com/in/mohamed-munshif)  
+**Email:** munshif20032003@gmail.com  
+
+If you have any feedback, suggestions, or opportunities related to this project, feel free to contact me through LinkedIn or email.
