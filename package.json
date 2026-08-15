@@ -1,0 +1,22 @@
+{
+  "name": "fancy-shop-manager",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Fancy Shop Manager with React, Express and Firebase",
+  "scripts": {
+    "setup": "npm install --prefix backend && npm install --prefix frontend",
+    "dev": "concurrently --names BACKEND,FRONTEND --prefix-colors blue,green \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint",
+    "start": "npm --prefix backend start",
+    "postinstall": "npm install --prefix backend && npm install --prefix frontend"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.4",
+    "concurrently": "^9.2.1",
+    "postcss": "^8.5.20",
+    "tailwindcss": "^3.4.19"
+  }
+}
