@@ -85,7 +85,16 @@ This version adds:
 - Product duplicate logic based on name + brand + purchased-from shop + selling price.
 - Online deployment guide in `ONLINE_DEPLOYMENT_AND_NEW_FEATURES.md`.
 
+## Demo Login
 
+### Admin
+- Email: admin@gmail.com
+- Role: Admin
+
+### Staff
+- Email: mufees@gmail.com
+- Role: Staff
+  
 ## Contact
 
 **Developer:** Mohamed Munshif  
